@@ -218,10 +218,11 @@ Return JSON.`;
 
     let resp;
     try {
-      resp = await client.messages.create({ model: MODEL, max_tokens: 8000, system: sys, messages: [{ role: "user", content: user }] });
+      resp = await client.messages.create({ model: MODEL, max_tokens: 16000, system: sys, messages: [{ role: "user", content: user }] });
     } catch (e: any) {
       throw new Error(`claude_failed: ${e.message}`);
     }
+    if (resp.stop_reason === "max_tokens") throw new Error(`truncated_response (raise max_tokens or split item)`);
 
     const text = (resp.content.find((b: any) => b.type === "text") as any)?.text || "";
     const jsonStr = extractJSON(text);
