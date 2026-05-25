@@ -1,139 +1,73 @@
-"use client";
+import { listAll } from "@/lib/db";
 
-import { useEffect, useState } from "react";
+export const dynamic = "force-dynamic";
 
-interface Ad {
-  id: string;
-  created_at: string;
-  product_name?: string;
-  script?: string;
-  video_url?: string;
-  thumbnail_url?: string;
-  status?: string;
-  platform?: string;
+export default async function LibraryPage() {
+  const data = await listAll();
+  if (!data) {
+    return (
+      <div className="p-10 max-w-3xl">
+        <h1 className="text-2xl font-bold">Library</h1>
+        <div className="mt-10 border border-dashed border-amber-500/40 bg-amber-500/5 rounded-xl p-6 text-amber-300 text-sm">
+          Supabase not configured. Add <code>SUPABASE_URL</code> + <code>SUPABASE_SERVICE_KEY</code> env vars + run <code>supabase/schema.sql</code> in your Supabase project.
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="p-10 max-w-5xl">
+      <h1 className="text-2xl font-bold">Library</h1>
+      <p className="text-neutral-400 text-sm mt-1">
+        {data.videos.length} videos · {data.ads.length} analyzed ads · {data.campaigns.length} launched campaigns
+      </p>
+
+      <Section title={`Generated videos (${data.videos.length})`}>
+        <div className="grid grid-cols-3 gap-3">
+          {data.videos.map((v: any) => (
+            <div key={v.id} className="rounded-lg border border-neutral-800 p-3">
+              <div className="aspect-[9/16] bg-neutral-900 rounded overflow-hidden mb-2">
+                {v.video_url ? <video src={v.video_url} controls className="w-full h-full object-cover" /> : <div className="flex h-full items-center justify-center text-xs text-neutral-500">{v.status || "pending"}</div>}
+              </div>
+              <div className="text-xs text-neutral-300 truncate">{v.product_title}</div>
+              <div className="text-[10px] text-neutral-500">{v.model} · {v.style}</div>
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      <Section title={`Analyzed ads (${data.ads.length})`}>
+        <div className="space-y-2">
+          {data.ads.map((a: any) => (
+            <div key={a.id} className="rounded-lg border border-neutral-800 p-3 text-sm">
+              <div className="flex justify-between">
+                <div className="truncate flex-1 text-neutral-400">{a.source_url || "(no url)"}</div>
+                <div className="text-amber-300 font-bold ml-3">{a.overall}/10</div>
+              </div>
+              <div className="text-xs text-neutral-500 mt-1">Hook {a.hook_score} · Ret {a.retention_score} · CTA {a.cta_score}</div>
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      <Section title={`Launched campaigns (${data.campaigns.length})`}>
+        <div className="space-y-2">
+          {data.campaigns.map((c: any) => (
+            <div key={c.id} className="rounded-lg border border-neutral-800 p-3 text-sm">
+              <div className="font-medium">{c.name}</div>
+              <div className="text-xs text-neutral-500">${c.daily_budget}/day · {(c.countries || []).join(", ")} · {c.meta_campaign_id}</div>
+            </div>
+          ))}
+        </div>
+      </Section>
+    </div>
+  );
 }
 
-export default function LibraryPage() {
-  const [ads, setAds] = useState<Ad[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    fetch("/api/products")
-      .then((r) => r.json())
-      .then((data) => {
-        setAds(Array.isArray(data) ? data : data.ads ?? []);
-        setLoading(false);
-      })
-      .catch((e) => {
-        setError(e.message);
-        setLoading(false);
-      });
-  }, []);
-
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <main className="min-h-screen bg-black text-white p-8">
-      <h1 className="text-3xl font-bold mb-8">Ad Library</h1>
-
-      {loading && <p className="text-zinc-400">Loading ads...</p>}
-      {error && <p className="text-red-400">Error: {error}</p>}
-
-      {!loading && !error && ads.length === 0 && (
-        <p className="text-zinc-400">No ads yet. Generate your first ad!</p>
-      )}
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-        {ads.map((ad) => (
-          <div
-            key={ad.id}
-            className="bg-zinc-900 rounded-xl overflow-hidden border border-zinc-800 hover:border-zinc-600 transition-colors"
-          >
-            <div className="relative aspect-video bg-zinc-800">
-              {ad.thumbnail_url ? (
-                ad.thumbnail_url.startsWith("data:video") ? (
-                  <video
-                    src={ad.video_url}
-                    poster={undefined}
-                    className="w-full h-full object-cover"
-                    muted
-                    preload="metadata"
-                  />
-                ) : (
-                  <img
-                    src={ad.thumbnail_url}
-                    alt={ad.product_name ?? "Ad thumbnail"}
-                    className="w-full h-full object-cover"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).style.display = "none";
-                    }}
-                  />
-                )
-              ) : ad.video_url ? (
-                <video
-                  src={ad.video_url}
-                  className="w-full h-full object-cover"
-                  muted
-                  preload="metadata"
-                  onLoadedMetadata={(e) => {
-                    (e.target as HTMLVideoElement).currentTime = 0;
-                  }}
-                />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center">
-                  <span className="text-zinc-600 text-sm">
-                    {ad.status === "generating" ? "Generating..." : "No preview"}
-                  </span>
-                </div>
-              )}
-
-              <div className="absolute top-2 right-2">
-                <span
-                  className={`text-xs px-2 py-1 rounded-full ${
-                    ad.status === "succeeded" || ad.status === "done"
-                      ? "bg-green-900 text-green-300"
-                      : ad.status === "generating" || ad.status === "processing"
-                      ? "bg-yellow-900 text-yellow-300"
-                      : ad.status === "failed"
-                      ? "bg-red-900 text-red-300"
-                      : "bg-zinc-700 text-zinc-300"
-                  }`}
-                >
-                  {ad.status ?? "unknown"}
-                </span>
-              </div>
-            </div>
-
-            <div className="p-4">
-              <h3 className="font-semibold text-white truncate">
-                {ad.product_name ?? "Untitled Ad"}
-              </h3>
-              {ad.script && (
-                <p className="text-zinc-400 text-sm mt-1 line-clamp-2">{ad.script}</p>
-              )}
-              <div className="flex items-center justify-between mt-3">
-                {ad.platform && (
-                  <span className="text-xs text-zinc-500 uppercase tracking-wide">
-                    {ad.platform}
-                  </span>
-                )}
-                <span className="text-xs text-zinc-600 ml-auto">
-                  {new Date(ad.created_at).toLocaleDateString()}
-                </span>
-              </div>
-              {ad.video_url && (
-                <a
-                  href={ad.video_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-3 block w-full text-center text-sm bg-zinc-800 hover:bg-zinc-700 text-white py-2 rounded-lg transition-colors"
-                >
-                  View Video
-                </a>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-    </main>
+    <section className="mt-8">
+      <h2 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide mb-3">{title}</h2>
+      {children}
+    </section>
   );
 }

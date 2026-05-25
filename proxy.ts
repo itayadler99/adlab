@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 export const config = {
-  matcher: "/((?!_next|favicon|api/health).*)",
+  matcher: "/((?!_next|favicon|api/health|api/cron).*)",
 };
 
 export function proxy(req: NextRequest) {

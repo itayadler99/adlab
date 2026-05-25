@@ -1,52 +1,57 @@
-import Replicate from "replicate";
+// Video generation — Replicate REST (Higgsfield has no public REST yet)
+const REPLICATE_BASE = "https://api.replicate.com/v1";
 
-const replicate = new Replicate({ auth: process.env.REPLICATE_API_TOKEN });
-
-export async function generateVideo(scriptText: string, imageUrl: string): Promise<string> {
-  const output = await replicate.run(
-    "minimax/video-01" as `${string}/${string}`,
-    {
-      input: {
-        prompt: scriptText,
-        first_frame_image: imageUrl,
-      },
-    }
-  );
-  if (typeof output === "string") return output;
-  if (Array.isArray(output) && output.length > 0) return output[0] as string;
-  throw new Error("Unexpected video output format");
+function token() {
+  const t = process.env.REPLICATE_API_TOKEN;
+  if (!t) throw new Error("REPLICATE_API_TOKEN not set");
+  return t;
 }
 
-export async function extractThumbnail(videoUrl: string): Promise<string | null> {
-  try {
-    const output = await replicate.run(
-      "lucataco/extract-frames:b5e115fb7698ee9c81f35f2c3f6e37e5f84c8b2f2c2f2c2f2c2f2c2f2c2f2c" as `${string}/${string}:${string}`,
-      {
-        input: {
-          video_url: videoUrl,
-          get_first_frame: true,
-          fps: 1,
-          start_time: 0,
-          end_time: 1,
-        },
-      }
-    );
-    if (Array.isArray(output) && output.length > 0) return output[0] as string;
-    return null;
-  } catch {
-    return await extractThumbnailFallback(videoUrl);
-  }
+export type VideoModel = "kling-1.6" | "veo-3" | "seedance-1.0-pro";
+
+const MODEL_MAP: Record<VideoModel, string> = {
+  "kling-1.6": "kwaivgi/kling-v1.6-pro",
+  "veo-3": "google/veo-3",
+  "seedance-1.0-pro": "bytedance/seedance-1-pro",
+};
+
+export interface VideoJob {
+  id: string;
+  status: "starting" | "processing" | "succeeded" | "failed" | "canceled";
+  output?: string | string[];
+  error?: string;
+  urls?: { get: string; cancel: string };
 }
 
-async function extractThumbnailFallback(videoUrl: string): Promise<string | null> {
-  try {
-    const response = await fetch(videoUrl, { headers: { Range: "bytes=0-65535" } });
-    if (!response.ok) return null;
-    const arrayBuffer = await response.arrayBuffer();
-    const base64 = Buffer.from(arrayBuffer).toString("base64");
-    const mimeType = "video/mp4";
-    return `data:${mimeType};base64,${base64.substring(0, 100)}`;
-  } catch {
-    return null;
-  }
+export async function startVideo(opts: {
+  model: VideoModel;
+  prompt: string;
+  reference_image_url?: string;
+  duration?: number;
+  aspect_ratio?: "9:16" | "16:9" | "1:1";
+}): Promise<VideoJob> {
+  const input: Record<string, any> = {
+    prompt: opts.prompt,
+    duration: opts.duration || 10,
+    aspect_ratio: opts.aspect_ratio || "9:16",
+  };
+  if (opts.reference_image_url) input.image = opts.reference_image_url;
+
+  const res = await fetch(`${REPLICATE_BASE}/models/${MODEL_MAP[opts.model]}/predictions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token()}`,
+      "Content-Type": "application/json",
+      Prefer: "wait=0",
+    },
+    body: JSON.stringify({ input }),
+  });
+  return res.json();
+}
+
+export async function pollVideo(id: string): Promise<VideoJob> {
+  const res = await fetch(`${REPLICATE_BASE}/predictions/${id}`, {
+    headers: { Authorization: `Bearer ${token()}` },
+  });
+  return res.json();
 }

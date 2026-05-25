@@ -1,44 +1,47 @@
--- AdLab schema
+-- AdLab v0.2 schema. Run once in Supabase SQL editor.
 
-create extension if not exists "uuid-ossp";
-
-create table if not exists ads (
-  id uuid primary key default uuid_generate_v4(),
+create table if not exists generated_videos (
+  id uuid primary key default gen_random_uuid(),
   created_at timestamptz default now(),
-  updated_at timestamptz default now(),
-  user_id text,
-  product_url text,
-  product_name text,
-  product_description text,
+  product_title text,
+  style text,
+  duration int,
+  model text,
   script text,
+  visual_prompt text,
+  cta text,
+  replicate_id text unique,
   video_url text,
-  thumbnail_url text,
-  prediction_id text,
-  status text default 'pending',
-  platform text,
-  launched_at timestamptz,
-  meta_ad_id text,
-  meta_campaign_id text,
-  meta_adset_id text,
-  spy_source text,
-  spy_data jsonb
+  status text
 );
 
-alter table ads add column if not exists thumbnail_url text;
+create table if not exists scraped_ads (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz default now(),
+  source_url text,
+  transcript text,
+  visual_description text,
+  hook_score int,
+  retention_score int,
+  cta_score int,
+  overall int,
+  reasons text[],
+  steal_this text[]
+);
 
-create or replace function update_updated_at()
-returns trigger as $$
-begin
-  new.updated_at = now();
-  return new;
-end;
-$$ language plpgsql;
+create table if not exists campaigns (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz default now(),
+  name text,
+  meta_campaign_id text,
+  meta_adset_id text,
+  meta_creative_id text,
+  meta_ad_id text,
+  video_url text,
+  daily_budget int,
+  countries text[]
+);
 
-drop trigger if exists ads_updated_at on ads;
-create trigger ads_updated_at
-  before update on ads
-  for each row execute function update_updated_at();
-
-create index if not exists ads_user_id_idx on ads(user_id);
-create index if not exists ads_status_idx on ads(status);
-create index if not exists ads_prediction_id_idx on ads(prediction_id);
+create index if not exists idx_videos_created on generated_videos(created_at desc);
+create index if not exists idx_ads_overall on scraped_ads(overall desc);
+create index if not exists idx_campaigns_created on campaigns(created_at desc);

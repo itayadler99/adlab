@@ -5,7 +5,7 @@
 // Required env: ANTHROPIC_API_KEY, GITHUB_TOKEN (repo scope), GITHUB_REPO ("owner/name").
 // Optional env: CRON_SECRET (Vercel auto-sends as Bearer header).
 
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 
 export const runtime = "nodejs";
@@ -115,13 +115,19 @@ export async function GET(req: Request) {
 
 Rules:
 - Project: Next.js 16 App Router + Tailwind v4 (dark) + TypeScript, deployed on Vercel
-- Existing lib: lib/meta.ts, lib/shopify.ts, lib/anthropic.ts, lib/video.ts, lib/db.ts
+- Existing lib + EXPORTS (use ONLY these from each module):
+  * lib/meta.ts: metaGet, metaPost, getCampaigns, getCampaignInsights, createCampaign, createAdset, uploadVideoFromUrl, uploadImageFromUrl, createVideoCreative, createAd
+  * lib/shopify.ts: shopifyGet, getProducts, getProduct
+  * lib/anthropic.ts: writeAdScript, scoreAd
+  * lib/video.ts: startVideo, pollVideo, MODEL_MAP, VideoJob
+  * lib/db.ts: saveVideo, updateVideo, saveAd, saveCampaign, listAll (NO bare 'supabase' export)
 - Pages: app/page.tsx, app/generate, app/launch, app/spy, app/library
-- API: app/api/{generate,poll,launch,spy,transcribe,products,health}
-- Auth: proxy.ts (Basic Auth, ADLAB_PASSWORD env). In Next 16 file is proxy.ts and export is named proxy.
-- Imports: "@/lib/..." and "@/components/..."
+- API: app/api/{generate,poll,launch,spy,transcribe,products,health,cron/auto-build}
+- proxy.ts is middleware — never import it in route handlers. Auth is automatic via matcher.
+- Imports use "@/lib/..." only. Never import from "@/proxy".
 - Output COMPLETE file content per changed file. No partial diffs.
-- Minimize new deps. Mention any new dep in summary.
+- DO NOT add new npm dependencies. Use only deps already in package.json: @anthropic-ai/sdk, @supabase/supabase-js, next, react, react-dom, tailwindcss, typescript, replicate. If a feature needs a missing dep, skip it and explain in summary.
+- DO NOT modify lib/*.ts or existing API routes unless absolutely required. Prefer ADD-only changes (new file).
 - No comments in JSON. No code fences. No prose.`;
 
   const user = `Implement this backlog item:
@@ -176,5 +182,18 @@ Return JSON.`;
   const newCl = `# Changelog\n\n- ${stamp} — ${summary}\n${prev.replace(/^# Changelog\n+/, "")}`;
   await api.putFile("CHANGELOG.md", newCl, `auto: changelog ${summary}`, cl?.sha);
 
-  return NextResponse.json({ ok: true, item, summary, applied });
+  // 7. Self-chain: if more items remain, kick off the next run after response
+  const remainingAfter = lines.filter((l) => l.trim().startsWith("- [ ]")).length;
+  if (remainingAfter > 0) {
+    const host = req.headers.get("host") || "adlab-amber.vercel.app";
+    const proto = host.includes("localhost") ? "http" : "https";
+    const selfUrl = `${proto}://${host}/api/cron/auto-build`;
+    const headers: Record<string, string> = { "User-Agent": "adlab-self-chain" };
+    if (secret) headers.Authorization = `Bearer ${secret}`;
+    after(async () => {
+      try { await fetch(selfUrl, { headers }); } catch {}
+    });
+  }
+
+  return NextResponse.json({ ok: true, item, summary, applied, remaining: remainingAfter });
 }
