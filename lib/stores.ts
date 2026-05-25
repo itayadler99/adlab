@@ -16,9 +16,9 @@ export const STORES: StoreConfig[] = [
   {
     id: "montier_us",
     name: "Montier US",
-    adAccountId: envOr("META_AD_ACCOUNT_MONTIER_US", "act_2312364629134701"),
-    pageId: envOr("META_PAGE_MONTIER_US"),
-    shopifyDomain: envOr("SHOPIFY_DOMAIN_MONTIER_US"),
+    adAccountId: envOr("META_AD_ACCOUNT_MONTIER_US", "act_1519658795732666"),
+    pageId: envOr("META_PAGE_MONTIER_US", "796977063501732"),
+    shopifyDomain: envOr("SHOPIFY_DOMAIN_MONTIER_US", "hkg1nb-hf.myshopify.com"),
     defaultLink: envOr("LINK_MONTIER_US", "https://montierjewelry.com"),
   },
   {
