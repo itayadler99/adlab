@@ -1,5 +1,6 @@
 # Changelog
 
+- 2026-05-25 — Convert / to public landing page, move dashboard to /app
 - 2026-05-25 — Implement approve workflow: drafts queue with owner approval before Meta launch
 - 2026-05-25 — Add cost dashboard page with per-generation estimates, total burn, and monthly budget bar
 - 2026-05-25 — feat(/spy): one-click pipeline — paste FB Ad Library URL → fetch video → transcribe → score

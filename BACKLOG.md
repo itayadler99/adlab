@@ -9,7 +9,7 @@ Auto-builder picks the TOP unchecked item every 12 hours.
 - [x] `/spy`: paste Facebook Ad Library URL → auto-fetch video URL → auto-transcribe → auto-score (one click pipeline)
 - [x] Cost dashboard: estimate $ per generation, total burn, monthly budget bar
 - [x] Approve workflow: drafts queue, owner approves before Meta launch
-- [~] Public landing page at `/` (move dashboard to `/app`) — convert to real SaaS <!-- lease:wq2cll -->
+- [x] Public landing page at `/` (move dashboard to `/app`) — convert to real SaaS
 - [ ] `/api/cron/check-winners` endpoint scans Meta ROAS, alerts on ROAS > 3 via webhook
 - [ ] Add Sora-2 video option once REST is exposed (currently MCP-only)
 - [ ] Add Soul ID picker (Higgsfield character avatars) once REST API opens up
