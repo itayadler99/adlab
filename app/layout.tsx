@@ -15,8 +15,18 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "AdLab",
-  description: "AI-powered ad generation",
+  description: "AI-powered ad creation and management",
 };
+
+const NAV_LINKS = [
+  { href: "/", label: "Home" },
+  { href: "/generate", label: "Generate" },
+  { href: "/drafts", label: "Drafts" },
+  { href: "/launch", label: "Launch" },
+  { href: "/spy", label: "Spy" },
+  { href: "/library", label: "Library" },
+  { href: "/costs", label: "Costs" },
+];
 
 export default function RootLayout({
   children,
@@ -25,31 +35,23 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body
-        className={`${
-          geistSans.variable
-        } ${geistMono.variable} antialiased bg-gray-950 text-white`}
-      >
-        <nav className="border-b border-gray-800 bg-gray-950 sticky top-0 z-50">
-          <div className="max-w-6xl mx-auto px-4 h-14 flex items-center gap-6">
-            <Link href="/" className="font-bold text-lg tracking-tight text-white">
+      <body className={`${geistSans.variable} ${geistMono.variable} antialiased bg-gray-950 text-gray-100`}>
+        <nav className="border-b border-gray-800 bg-gray-950/80 backdrop-blur-sm sticky top-0 z-40">
+          <div className="max-w-7xl mx-auto px-4 h-14 flex items-center gap-6">
+            <Link href="/" className="font-bold text-white text-lg tracking-tight">
               AdLab
             </Link>
-            <Link href="/generate" className="text-sm text-gray-400 hover:text-white transition-colors">
-              Generate
-            </Link>
-            <Link href="/launch" className="text-sm text-gray-400 hover:text-white transition-colors">
-              Launch
-            </Link>
-            <Link href="/spy" className="text-sm text-gray-400 hover:text-white transition-colors">
-              Spy
-            </Link>
-            <Link href="/library" className="text-sm text-gray-400 hover:text-white transition-colors">
-              Library
-            </Link>
-            <Link href="/costs" className="text-sm text-gray-400 hover:text-white transition-colors">
-              Costs
-            </Link>
+            <div className="flex items-center gap-1">
+              {NAV_LINKS.filter((l) => l.href !== "/").map((link) => (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  className="px-3 py-1.5 rounded-md text-sm text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
+                >
+                  {link.label}
+                </Link>
+              ))}
+            </div>
           </div>
         </nav>
         {children}
