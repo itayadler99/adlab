@@ -1,42 +1,58 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import Link from "next/link";
+
+const geistSans = Geist({
+  variable: "--font-geist-sans",
+  subsets: ["latin"],
+});
+
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+});
 
 export const metadata: Metadata = {
-  title: "AdLab — AI Ad Creative + Meta Launcher",
-  description: "Generate UGC ads, score competitors, launch campaigns in one place.",
+  title: "AdLab",
+  description: "AI-powered ad generation",
 };
 
-const NAV = [
-  { href: "/", label: "Dashboard" },
-  { href: "/generate", label: "Generate" },
-  { href: "/launch", label: "Launch" },
-  { href: "/spy", label: "Spy" },
-  { href: "/library", label: "Library" },
-];
-
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
   return (
-    <html lang="en" className="h-full antialiased dark">
-      <body className="min-h-full bg-neutral-950 text-neutral-100 flex">
-        <aside className="w-56 border-r border-neutral-800 p-6 flex flex-col gap-1">
-          <div className="text-xl font-bold mb-6 tracking-tight">
-            Ad<span className="text-fuchsia-400">Lab</span>
-          </div>
-          {NAV.map((n) => (
-            <Link
-              key={n.href}
-              href={n.href}
-              className="px-3 py-2 rounded-md text-sm text-neutral-300 hover:bg-neutral-800 hover:text-white transition"
-            >
-              {n.label}
+    <html lang="en">
+      <body
+        className={`${
+          geistSans.variable
+        } ${geistMono.variable} antialiased bg-gray-950 text-white`}
+      >
+        <nav className="border-b border-gray-800 bg-gray-950 sticky top-0 z-50">
+          <div className="max-w-6xl mx-auto px-4 h-14 flex items-center gap-6">
+            <Link href="/" className="font-bold text-lg tracking-tight text-white">
+              AdLab
             </Link>
-          ))}
-          <div className="mt-auto text-xs text-neutral-500">
-            v0.1 · Montier US
+            <Link href="/generate" className="text-sm text-gray-400 hover:text-white transition-colors">
+              Generate
+            </Link>
+            <Link href="/launch" className="text-sm text-gray-400 hover:text-white transition-colors">
+              Launch
+            </Link>
+            <Link href="/spy" className="text-sm text-gray-400 hover:text-white transition-colors">
+              Spy
+            </Link>
+            <Link href="/library" className="text-sm text-gray-400 hover:text-white transition-colors">
+              Library
+            </Link>
+            <Link href="/costs" className="text-sm text-gray-400 hover:text-white transition-colors">
+              Costs
+            </Link>
           </div>
-        </aside>
-        <main className="flex-1 min-h-screen">{children}</main>
+        </nav>
+        {children}
       </body>
     </html>
   );
