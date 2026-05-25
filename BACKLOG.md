@@ -6,7 +6,7 @@ Auto-builder picks the TOP unchecked item every 12 hours.
 - [x] Apify Actor wrapper in `lib/apify.ts` for Facebook Ad Library scraping; `/spy` gets a "Scrape URL" button
 - [x] `/generate`: "Variations" button — re-render same script with different model/style
 - [x] `/launch`: pull existing Meta campaigns into a dropdown, clone-and-edit
-- [ ] `/spy`: paste Facebook Ad Library URL → auto-fetch video URL → auto-transcribe → auto-score (one click pipeline)
+- [x] `/spy`: paste Facebook Ad Library URL → auto-fetch video URL → auto-transcribe → auto-score (one click pipeline)
 - [ ] Cost dashboard: estimate $ per generation, total burn, monthly budget bar
 - [ ] Approve workflow: drafts queue, owner approves before Meta launch
 - [ ] Public landing page at `/` (move dashboard to `/app`) — convert to real SaaS
