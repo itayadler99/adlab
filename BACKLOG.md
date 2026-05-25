@@ -10,7 +10,7 @@ Auto-builder picks the TOP unchecked item every 12 hours.
 - [x] Cost dashboard: estimate $ per generation, total burn, monthly budget bar
 - [x] Approve workflow: drafts queue, owner approves before Meta launch
 - [x] Public landing page at `/` (move dashboard to `/app`) — convert to real SaaS
-- [~] `/api/cron/check-winners` endpoint scans Meta ROAS, alerts on ROAS > 3 via webhook <!-- lease:2ocvbs -->
+- [x] `/api/cron/check-winners` endpoint scans Meta ROAS, alerts on ROAS > 3 via webhook
 - [ ] Add Sora-2 video option once REST is exposed (currently MCP-only)
 - [ ] Add Soul ID picker (Higgsfield character avatars) once REST API opens up
 - [ ] Add A/B test launcher: 1 script → 2 video models → 2 Meta adsets, auto-compare ROAS after 5 days
