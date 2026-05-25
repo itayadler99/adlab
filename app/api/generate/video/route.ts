@@ -1,27 +1,50 @@
-import { NextResponse } from "next/server";
-import { startVideo } from "@/lib/video";
-import { saveVideo } from "@/lib/db";
+import { NextRequest, NextResponse } from "next/server";
+import { proxy } from "@/proxy";
+import Replicate from "replicate";
+import { supabase } from "@/lib/db";
 
-export const runtime = "nodejs";
-export const maxDuration = 30;
+const replicate = new Replicate({ auth: process.env.REPLICATE_API_TOKEN });
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
+  const authResult = await proxy(req);
+  if (authResult) return authResult;
+
   try {
     const body = await req.json();
-    const job = await startVideo(body);
-    await saveVideo({
-      product_title: body.product_title,
-      style: body.style,
-      duration: body.duration,
-      model: body.model,
-      script: body.script,
-      visual_prompt: body.prompt,
-      cta: body.cta,
-      replicate_id: job.id,
-      status: job.status,
+    const { script, imageUrl, adId } = body as {
+      script: string;
+      imageUrl?: string;
+      adId?: string;
+    };
+
+    if (!script) {
+      return NextResponse.json({ error: "Missing script" }, { status: 400 });
+    }
+
+    const prediction = await replicate.predictions.create({
+      model: "minimax/video-01",
+      input: {
+        prompt: script,
+        ...(imageUrl ? { first_frame_image: imageUrl } : {}),
+      },
     });
-    return NextResponse.json(job);
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+
+    if (adId) {
+      await supabase
+        .from("ads")
+        .update({ prediction_id: prediction.id, status: "generating" })
+        .eq("id", adId);
+    }
+
+    return NextResponse.json({
+      predictionId: prediction.id,
+      status: prediction.status,
+    });
+  } catch (error) {
+    console.error("Video generation error:", error);
+    return NextResponse.json(
+      { error: "Failed to start video generation" },
+      { status: 500 }
+    );
   }
 }
