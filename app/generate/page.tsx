@@ -1,199 +1,341 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useState, useCallback } from "react";
+import { MODEL_MAP } from "@/lib/video";
 
-type Product = { id: number; title: string; handle: string; image?: { src: string } };
-type Script = { script: string; visual_prompt: string; cta: string };
-type VideoJob = { id: string; status: string; output?: string | string[]; error?: string };
+type ScriptData = {
+  script: string;
+  hook: string;
+  cta: string;
+  product: string;
+};
+
+type VideoJob = {
+  jobId: string;
+  model: string;
+  style: string;
+  status: "pending" | "processing" | "done" | "failed";
+  url?: string;
+  thumbnail?: string;
+  script: ScriptData;
+};
+
+const STYLES = ["cinematic", "ugc", "product", "testimonial", "animated"];
 
 export default function GeneratePage() {
-  const [products, setProducts] = useState<Product[]>([]);
-  const [productId, setProductId] = useState<number | "">("");
-  const [style, setStyle] = useState<"yapping" | "founder_pov" | "ugc_review" | "demo">("yapping");
-  const [duration, setDuration] = useState<15 | 30 | 45>(15);
-  const [model, setModel] = useState<"kling-1.6" | "veo-3" | "seedance-1.0-pro">("kling-1.6");
-  const [script, setScript] = useState<Script | null>(null);
-  const [job, setJob] = useState<VideoJob | null>(null);
-  const [loading, setLoading] = useState<"" | "script" | "video">("");
-  const [error, setError] = useState<string>("");
+  const [productUrl, setProductUrl] = useState("");
+  const [platform, setPlatform] = useState("facebook");
+  const [loading, setLoading] = useState(false);
+  const [scriptData, setScriptData] = useState<ScriptData | null>(null);
+  const [jobs, setJobs] = useState<VideoJob[]>([]);
+  const [error, setError] = useState("");
+  const [showVariations, setShowVariations] = useState(false);
+  const [selectedModel, setSelectedModel] = useState(Object.keys(MODEL_MAP)[0]);
+  const [selectedStyle, setSelectedStyle] = useState(STYLES[0]);
+  const [generating, setGenerating] = useState(false);
 
-  useEffect(() => {
-    fetch("/api/products")
-      .then((r) => r.json())
-      .then((d) => setProducts(d.products || []))
-      .catch(() => setError("Could not load products. Check SHOPIFY env vars."));
-  }, []);
+  const modelKeys = Object.keys(MODEL_MAP);
 
-  // Poll video job
-  useEffect(() => {
-    if (!job || job.status === "succeeded" || job.status === "failed") return;
-    const t = setInterval(async () => {
-      const r = await fetch(`/api/poll?id=${job.id}`).then((x) => x.json());
-      setJob(r);
-    }, 4000);
-    return () => clearInterval(t);
-  }, [job?.id, job?.status]);
-
-  async function generateScript() {
-    setLoading("script");
+  const handleGenerate = useCallback(async () => {
+    if (!productUrl.trim()) return;
+    setLoading(true);
     setError("");
-    setScript(null);
-    setJob(null);
+    setScriptData(null);
+    setJobs([]);
+    setShowVariations(false);
     try {
-      const product = products.find((p) => p.id === productId);
       const res = await fetch("/api/generate/script", {
         method: "POST",
-        body: JSON.stringify({
-          productTitle: product?.title,
-          productImageUrl: product?.image?.src,
-          style,
-          duration,
-        }),
-      }).then((r) => r.json());
-      if (res.error) throw new Error(res.error);
-      setScript(res);
-    } catch (e: any) {
-      setError(e.message);
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productUrl, platform }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      setScriptData(data);
+      await startVideo(data, selectedModel, selectedStyle);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to generate");
+    } finally {
+      setLoading(false);
     }
-    setLoading("");
-  }
+  }, [productUrl, platform, selectedModel, selectedStyle]);
 
-  async function generateVideo() {
-    if (!script) return;
-    setLoading("video");
-    setError("");
-    try {
-      const res = await fetch("/api/generate/video", {
-        method: "POST",
-        body: JSON.stringify({
-          prompt: script.visual_prompt,
-          duration: duration > 15 ? 10 : duration,
-          model,
-        }),
-      }).then((r) => r.json());
-      if (res.error) throw new Error(res.error);
-      setJob(res);
-    } catch (e: any) {
-      setError(e.message);
-    }
-    setLoading("");
-  }
+  const startVideo = useCallback(
+    async (script: ScriptData, model: string, style: string) => {
+      setGenerating(true);
+      const tempId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const newJob: VideoJob = {
+        jobId: tempId,
+        model,
+        style,
+        status: "pending",
+        script,
+      };
+      setJobs((prev) => [newJob, ...prev]);
+      try {
+        const res = await fetch("/api/generate/video", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ script: script.script, hook: script.hook, cta: script.cta, model, style }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        const jobId = data.jobId;
+        setJobs((prev) =>
+          prev.map((j) =>
+            j.jobId === tempId ? { ...j, jobId, status: "processing" } : j
+          )
+        );
+        pollJob(jobId, tempId);
+      } catch (e: unknown) {
+        setJobs((prev) =>
+          prev.map((j) =>
+            j.jobId === tempId ? { ...j, status: "failed" } : j
+          )
+        );
+        setError(e instanceof Error ? e.message : "Failed to start video");
+      } finally {
+        setGenerating(false);
+      }
+    },
+    []
+  );
 
-  const videoUrl = Array.isArray(job?.output) ? job?.output[0] : job?.output;
+  const pollJob = useCallback(async (jobId: string, tempId: string) => {
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/poll?jobId=${jobId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.status === "done" || data.status === "failed") {
+          clearInterval(interval);
+          setJobs((prev) =>
+            prev.map((j) =>
+              j.jobId === jobId || j.jobId === tempId
+                ? { ...j, status: data.status, url: data.url, thumbnail: data.thumbnail }
+                : j
+            )
+          );
+        } else {
+          setJobs((prev) =>
+            prev.map((j) =>
+              j.jobId === jobId || j.jobId === tempId
+                ? { ...j, status: data.status }
+                : j
+            )
+          );
+        }
+      } catch {
+        clearInterval(interval);
+      }
+    }, 4000);
+  }, []);
+
+  const handleVariation = useCallback(async () => {
+    if (!scriptData) return;
+    await startVideo(scriptData, selectedModel, selectedStyle);
+  }, [scriptData, selectedModel, selectedStyle, startVideo]);
 
   return (
-    <div className="p-10 max-w-3xl">
-      <h1 className="text-2xl font-bold">Generate</h1>
-      <p className="text-neutral-400 mt-1 text-sm">
-        Pick a product → Claude writes the script → Replicate renders the video.
-      </p>
+    <main className="min-h-screen bg-gray-950 text-white p-6 max-w-4xl mx-auto">
+      <h1 className="text-3xl font-bold mb-8 text-purple-400">Generate Ad Video</h1>
 
-      <div className="mt-8 space-y-4">
-        <Field label="Product">
-          <select
-            className="bg-neutral-900 border border-neutral-800 rounded px-3 py-2 w-full"
-            value={productId}
-            onChange={(e) => setProductId(e.target.value ? Number(e.target.value) : "")}
-          >
-            <option value="">— choose —</option>
-            {products.map((p) => (
-              <option key={p.id} value={p.id}>{p.title}</option>
-            ))}
-          </select>
-        </Field>
-
-        <div className="grid grid-cols-3 gap-3">
-          <Field label="Style">
-            <select className="bg-neutral-900 border border-neutral-800 rounded px-3 py-2 w-full"
-              value={style} onChange={(e) => setStyle(e.target.value as any)}>
-              <option value="yapping">Yapping</option>
-              <option value="founder_pov">Founder POV</option>
-              <option value="ugc_review">UGC review</option>
-              <option value="demo">Demo</option>
-            </select>
-          </Field>
-          <Field label="Duration">
-            <select className="bg-neutral-900 border border-neutral-800 rounded px-3 py-2 w-full"
-              value={duration} onChange={(e) => setDuration(Number(e.target.value) as any)}>
-              <option value={15}>15s</option>
-              <option value={30}>30s</option>
-              <option value={45}>45s</option>
-            </select>
-          </Field>
-          <Field label="Video model">
-            <select className="bg-neutral-900 border border-neutral-800 rounded px-3 py-2 w-full"
-              value={model} onChange={(e) => setModel(e.target.value as any)}>
-              <option value="kling-1.6">Kling 1.6 Pro</option>
-              <option value="veo-3">Veo 3</option>
-              <option value="seedance-1.0-pro">Seedance 1 Pro</option>
-            </select>
-          </Field>
+      {/* Input Section */}
+      <section className="bg-gray-900 rounded-2xl p-6 mb-6 space-y-4">
+        <div>
+          <label className="block text-sm text-gray-400 mb-1">Product URL</label>
+          <input
+            type="url"
+            value={productUrl}
+            onChange={(e) => setProductUrl(e.target.value)}
+            placeholder="https://yourstore.myshopify.com/products/..."
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
+          />
         </div>
-
-        <button
-          disabled={!productId || loading === "script"}
-          onClick={generateScript}
-          className="bg-fuchsia-500 hover:bg-fuchsia-400 text-white px-5 py-2 rounded font-medium disabled:opacity-40"
-        >
-          {loading === "script" ? "Writing…" : "1. Write script"}
-        </button>
-      </div>
-
-      {error && <div className="mt-6 text-rose-400 text-sm">{error}</div>}
-
-      {script && (
-        <section className="mt-10 border border-neutral-800 rounded-xl p-6 space-y-4">
-          <h2 className="text-lg font-semibold">Script</h2>
-          <Box label="Dialogue" body={script.script} />
-          <Box label="Visual prompt" body={script.visual_prompt} />
-          <Box label="CTA" body={script.cta} />
-          <button
-            disabled={loading === "video" || !!job}
-            onClick={generateVideo}
-            className="bg-emerald-500 hover:bg-emerald-400 text-black px-5 py-2 rounded font-medium disabled:opacity-40"
-          >
-            {loading === "video" ? "Submitting…" : "2. Render video"}
-          </button>
-        </section>
-      )}
-
-      {job && (
-        <section className="mt-6 border border-neutral-800 rounded-xl p-6">
-          <div className="text-sm">
-            Job <code className="text-neutral-400">{job.id}</code> · status:{" "}
-            <span className={job.status === "succeeded" ? "text-emerald-400" :
-              job.status === "failed" ? "text-rose-400" : "text-amber-400"}>
-              {job.status}
-            </span>
+        <div className="flex gap-4 flex-wrap">
+          <div className="flex-1 min-w-40">
+            <label className="block text-sm text-gray-400 mb-1">Platform</label>
+            <select
+              value={platform}
+              onChange={(e) => setPlatform(e.target.value)}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-purple-500"
+            >
+              <option value="facebook">Facebook</option>
+              <option value="instagram">Instagram</option>
+              <option value="tiktok">TikTok</option>
+            </select>
           </div>
-          {job.error && <div className="text-rose-400 mt-2 text-sm">{job.error}</div>}
-          {videoUrl && (
-            <div className="mt-4">
-              <video src={videoUrl} controls className="w-full rounded-lg" />
-              <a href={videoUrl} download className="text-fuchsia-400 underline text-sm mt-2 inline-block">
-                Download
-              </a>
+          <div className="flex-1 min-w-40">
+            <label className="block text-sm text-gray-400 mb-1">Model</label>
+            <select
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-purple-500"
+            >
+              {modelKeys.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex-1 min-w-40">
+            <label className="block text-sm text-gray-400 mb-1">Style</label>
+            <select
+              value={selectedStyle}
+              onChange={(e) => setSelectedStyle(e.target.value)}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-purple-500"
+            >
+              {STYLES.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <button
+          onClick={handleGenerate}
+          disabled={loading || !productUrl.trim()}
+          className="w-full py-3 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-700 disabled:cursor-not-allowed rounded-xl font-semibold text-lg transition"
+        >
+          {loading ? "Generating Script..." : "Generate Ad"}
+        </button>
+        {error && <p className="text-red-400 text-sm">{error}</p>}
+      </section>
+
+      {/* Script Preview */}
+      {scriptData && (
+        <section className="bg-gray-900 rounded-2xl p-6 mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-semibold text-purple-300">Script</h2>
+            <button
+              onClick={() => setShowVariations((v) => !v)}
+              className="px-4 py-1.5 bg-indigo-700 hover:bg-indigo-600 rounded-lg text-sm font-medium transition"
+            >
+              🎬 Variations
+            </button>
+          </div>
+          {scriptData.hook && (
+            <div className="mb-3">
+              <span className="text-xs text-gray-500 uppercase tracking-wide">Hook</span>
+              <p className="text-gray-200 mt-1">{scriptData.hook}</p>
+            </div>
+          )}
+          <div className="mb-3">
+            <span className="text-xs text-gray-500 uppercase tracking-wide">Script</span>
+            <p className="text-gray-200 mt-1 whitespace-pre-wrap">{scriptData.script}</p>
+          </div>
+          {scriptData.cta && (
+            <div>
+              <span className="text-xs text-gray-500 uppercase tracking-wide">CTA</span>
+              <p className="text-gray-200 mt-1">{scriptData.cta}</p>
+            </div>
+          )}
+
+          {/* Variations Panel */}
+          {showVariations && (
+            <div className="mt-6 border-t border-gray-700 pt-5">
+              <h3 className="text-sm font-semibold text-gray-300 mb-3">Render same script with a different model &amp; style</h3>
+              <div className="flex gap-4 flex-wrap mb-4">
+                <div className="flex-1 min-w-40">
+                  <label className="block text-xs text-gray-500 mb-1">Model</label>
+                  <select
+                    value={selectedModel}
+                    onChange={(e) => setSelectedModel(e.target.value)}
+                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500"
+                  >
+                    {modelKeys.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex-1 min-w-40">
+                  <label className="block text-xs text-gray-500 mb-1">Style</label>
+                  <select
+                    value={selectedStyle}
+                    onChange={(e) => setSelectedStyle(e.target.value)}
+                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500"
+                  >
+                    {STYLES.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <button
+                onClick={handleVariation}
+                disabled={generating}
+                className="px-6 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-700 disabled:cursor-not-allowed rounded-lg font-semibold text-sm transition"
+              >
+                {generating ? "Starting..." : "▶ Render Variation"}
+              </button>
             </div>
           )}
         </section>
       )}
-    </div>
-  );
-}
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="text-xs uppercase tracking-wide text-neutral-400 block mb-1">{label}</span>
-      {children}
-    </label>
-  );
-}
-
-function Box({ label, body }: { label: string; body: string }) {
-  return (
-    <div>
-      <div className="text-xs uppercase tracking-wide text-neutral-500">{label}</div>
-      <pre className="text-sm whitespace-pre-wrap mt-1 text-neutral-200">{body}</pre>
-    </div>
+      {/* Jobs List */}
+      {jobs.length > 0 && (
+        <section className="space-y-4">
+          <h2 className="text-xl font-semibold text-purple-300">Videos</h2>
+          {jobs.map((job) => (
+            <div key={job.jobId} className="bg-gray-900 rounded-2xl p-5 flex gap-5 items-start">
+              {/* Thumbnail / Status */}
+              <div className="w-32 h-20 bg-gray-800 rounded-xl overflow-hidden flex-shrink-0 flex items-center justify-center">
+                {job.status === "done" && job.url ? (
+                  <video src={job.url} className="w-full h-full object-cover" muted playsInline />
+                ) : job.status === "failed" ? (
+                  <span className="text-red-400 text-xs">Failed</span>
+                ) : (
+                  <span className="text-gray-500 text-xs animate-pulse">
+                    {job.status === "pending" ? "Queued" : "Processing…"}
+                  </span>
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1 flex-wrap">
+                  <span className="text-xs bg-indigo-900 text-indigo-300 rounded px-2 py-0.5">{job.model}</span>
+                  <span className="text-xs bg-gray-800 text-gray-400 rounded px-2 py-0.5">{job.style}</span>
+                  <span
+                    className={`text-xs rounded px-2 py-0.5 ${
+                      job.status === "done"
+                        ? "bg-green-900 text-green-300"
+                        : job.status === "failed"
+                        ? "bg-red-900 text-red-300"
+                        : "bg-yellow-900 text-yellow-300"
+                    }`}
+                  >
+                    {job.status}
+                  </span>
+                </div>
+                <p className="text-gray-400 text-xs line-clamp-2">{job.script.hook || job.script.script}</p>
+                {job.status === "done" && job.url && (
+                  <div className="mt-2 flex gap-3">
+                    <a
+                      href={job.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-purple-400 hover:text-purple-300 underline"
+                    >
+                      Watch
+                    </a>
+                    <a
+                      href={`/launch?videoUrl=${encodeURIComponent(job.url)}`}
+                      className="text-xs text-green-400 hover:text-green-300 underline"
+                    >
+                      Launch as Ad
+                    </a>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
+    </main>
   );
 }
