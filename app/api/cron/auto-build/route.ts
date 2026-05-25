@@ -234,12 +234,29 @@ Return JSON.`;
 
     const summary = plan.summary || item;
 
-    // 5. Validate imports in all write ops
+    // 5. Validate imports — but merge exports from files being written in this batch
+    const mergedExports = new Map(internalExports);
+    for (const f of plan.files || []) {
+      if (f.action !== "write" || !f.content) continue;
+      const key = f.path.endsWith(".ts") || f.path.endsWith(".tsx") ? f.path : null;
+      if (!key) continue;
+      const names = new Set<string>();
+      const re = /^\s*export\s+(?:async\s+)?(?:default\s+)?(?:function|const|let|var|class|interface|type|enum)\s+(\w+)/gm;
+      let mm: RegExpExecArray | null;
+      while ((mm = re.exec(f.content))) names.add(mm[1]);
+      // Also catch `export { a, b }` re-exports
+      const reExp = /^\s*export\s*\{([^}]+)\}/gm;
+      while ((mm = reExp.exec(f.content))) {
+        mm[1].split(",").forEach((s) => { const n = s.trim().split(/\s+as\s+/)[1] || s.trim().split(/\s+as\s+/)[0]; if (n) names.add(n.trim()); });
+      }
+      mergedExports.set(key, names);
+    }
+
     const validationErrs: string[] = [];
     for (const f of plan.files || []) {
       if (f.action !== "write" || !f.content) continue;
       if (!/\.(ts|tsx|mts|cts|js|jsx)$/.test(f.path)) continue;
-      const errs = validateImports(f.content, depSet, internalExports);
+      const errs = validateImports(f.content, depSet, mergedExports);
       if (errs.length) validationErrs.push(`${f.path}: ${errs.join("; ")}`);
     }
     if (validationErrs.length) throw new Error(`validation_failed: ${validationErrs.join(" | ")}`);
