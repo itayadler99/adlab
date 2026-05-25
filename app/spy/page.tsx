@@ -16,11 +16,23 @@ export default function SpyPage() {
   const [visual, setVisual] = useState("");
   const [score, setScore] = useState<Score | null>(null);
   const [loading, setLoading] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const [error, setError] = useState("");
+
+  async function transcribe() {
+    if (!url.trim()) { setError("Paste a direct media URL (mp4/mp3)."); return; }
+    setTranscribing(true); setError("");
+    try {
+      const res = await fetch("/api/transcribe", { method: "POST", body: JSON.stringify({ url }) }).then(r => r.json());
+      if (res.error) throw new Error(res.error);
+      setTranscript(res.transcript);
+    } catch (e: any) { setError(e.message); }
+    setTranscribing(false);
+  }
 
   async function analyze() {
     if (!transcript.trim()) {
-      setError("Paste a transcript. (Whisper transcription will be wired in v0.2.)");
+      setError("Paste a transcript or click Transcribe.");
       return;
     }
     setLoading(true);
@@ -47,9 +59,15 @@ export default function SpyPage() {
       </p>
 
       <div className="mt-6 space-y-4">
-        <F label="Source URL (Facebook Ad Library, TikTok, IG…)">
-          <input className="bg-neutral-900 border border-neutral-800 rounded px-3 py-2 w-full"
-            value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://www.facebook.com/ads/library/?id=…" />
+        <F label="Direct media URL (mp4/mp3) or Ad Library link">
+          <div className="flex gap-2">
+            <input className="bg-neutral-900 border border-neutral-800 rounded px-3 py-2 w-full"
+              value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…/clip.mp4" />
+            <button onClick={transcribe} disabled={transcribing}
+              className="bg-neutral-800 hover:bg-neutral-700 text-sm px-3 py-2 rounded whitespace-nowrap disabled:opacity-40">
+              {transcribing ? "…" : "Transcribe"}
+            </button>
+          </div>
         </F>
         <F label="Transcript (paste audio transcription)">
           <textarea className="bg-neutral-900 border border-neutral-800 rounded px-3 py-2 w-full min-h-32"

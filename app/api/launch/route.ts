@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createAd, createAdset, createCampaign, createVideoCreative, uploadVideoFromUrl } from "@/lib/meta";
+import { saveCampaign } from "@/lib/db";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -44,6 +45,17 @@ export async function POST(req: Request) {
       status: "PAUSED",
     });
     if (!ad.id) throw new Error("Ad create failed: " + JSON.stringify(ad));
+
+    await saveCampaign({
+      name: b.name,
+      meta_campaign_id: campaign.id,
+      meta_adset_id: adset.id,
+      meta_creative_id: creative.id,
+      meta_ad_id: ad.id,
+      video_url: b.video_url,
+      daily_budget: b.daily_budget,
+      countries: b.countries,
+    });
 
     return NextResponse.json({
       campaign_id: campaign.id,
