@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { startVideo } from "@/lib/video";
+import { startVideo, pollVideo, type VideoModel } from "@/lib/video";
 import { saveAbTest, updateAbTest } from "@/lib/abtests";
 import {
   createCampaign,
@@ -11,6 +11,12 @@ import {
 
 const FIVE_DAYS_MS = 5 * 24 * 60 * 60 * 1000;
 
+function normModel(m: string): VideoModel {
+  if (m === "kling" || m === "kling-1.6") return "kling-1.6";
+  if (m === "sora-2") return "sora-2";
+  return "minimax";
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -18,24 +24,26 @@ export async function POST(req: NextRequest) {
       script,
       product_id,
       model_a = "minimax",
-      model_b = "kling",
-      daily_budget = 1000,
-      ad_account_id,
+      model_b = "kling-1.6",
+      daily_budget = 10,
       page_id,
-      targeting,
+      link,
+      thumbnail_url,
     } = body;
 
-    if (!script || !product_id || !ad_account_id || !page_id) {
+    if (!script || !product_id || !page_id || !link) {
       return NextResponse.json(
-        { error: "script, product_id, ad_account_id, page_id are required" },
+        { error: "script, product_id, page_id, link required" },
         { status: 400 }
       );
     }
 
-    // Start both video jobs in parallel
+    const ma = normModel(model_a);
+    const mb = normModel(model_b);
+
     const [jobA, jobB] = await Promise.all([
-      startVideo({ model: model_a, script, aspect_ratio: "9:16" }),
-      startVideo({ model: model_b, script, aspect_ratio: "9:16" }),
+      startVideo(script, ma),
+      startVideo(script, mb),
     ]);
 
     const compareAfter = new Date(Date.now() + FIVE_DAYS_MS).toISOString();
@@ -43,23 +51,20 @@ export async function POST(req: NextRequest) {
     const test = await saveAbTest({
       script,
       product_id,
-      model_a,
-      model_b,
+      model_a: ma,
+      model_b: mb,
       video_job_a: jobA.id,
       video_job_b: jobB.id,
       status: "generating",
       compare_after: compareAfter,
-      meta: { daily_budget, ad_account_id, page_id, targeting },
+      meta: { daily_budget, page_id, link, thumbnail_url },
     });
 
-    // Poll for completion and launch async (fire and forget)
-    launchWhenReady(test.id, jobA.id, jobB.id, {
-      ad_account_id,
+    launchWhenReady(test.id, jobA.id, jobB.id, ma, mb, {
       page_id,
       daily_budget,
-      targeting,
-      model_a,
-      model_b,
+      link,
+      thumbnail_url,
     }).catch(console.error);
 
     return NextResponse.json({ id: test.id, status: "generating" });
@@ -69,23 +74,13 @@ export async function POST(req: NextRequest) {
   }
 }
 
-async function pollUntilDone(
-  jobId: string,
-  model: string
-): Promise<string> {
-  const { pollVideo } = await import("@/lib/video");
+async function pollUntilDone(jobId: string, model: VideoModel): Promise<string> {
   const maxAttempts = 60;
-  let attempts = 0;
-  while (attempts < maxAttempts) {
+  for (let i = 0; i < maxAttempts; i++) {
     await new Promise((r) => setTimeout(r, 10000));
-    const result = await pollVideo(jobId, model as "minimax" | "kling" | "luma");
-    if (result.status === "succeeded" && result.video_url) {
-      return result.video_url;
-    }
-    if (result.status === "failed") {
-      throw new Error(`Video job ${jobId} failed`);
-    }
-    attempts++;
+    const result = await pollVideo(jobId, model);
+    if (result.status === "succeeded" && result.videoUrl) return result.videoUrl;
+    if (result.status === "failed") throw new Error(`Video job ${jobId} failed`);
   }
   throw new Error(`Video job ${jobId} timed out`);
 }
@@ -94,35 +89,31 @@ async function launchWhenReady(
   testId: string,
   jobIdA: string,
   jobIdB: string,
-  opts: {
-    ad_account_id: string;
-    page_id: string;
-    daily_budget: number;
-    targeting?: unknown;
-    model_a: string;
-    model_b: string;
-  }
+  modelA: VideoModel,
+  modelB: VideoModel,
+  opts: { page_id: string; daily_budget: number; link: string; thumbnail_url?: string }
 ) {
   const [urlA, urlB] = await Promise.all([
-    pollUntilDone(jobIdA, opts.model_a),
-    pollUntilDone(jobIdB, opts.model_b),
+    pollUntilDone(jobIdA, modelA),
+    pollUntilDone(jobIdB, modelB),
   ]);
 
-  await updateAbTest(testId, { video_url_a: urlA, video_url_b: urlB, status: "launching" });
+  await updateAbTest(testId, {
+    video_url_a: urlA,
+    video_url_b: urlB,
+    status: "launching",
+  });
 
-  // Create one campaign for the test
-  const campaign = await createCampaign(opts.ad_account_id, {
+  const campaign = await createCampaign({
     name: `AB Test ${testId.slice(0, 8)}`,
     objective: "OUTCOME_SALES",
     status: "ACTIVE",
   });
-
   const campaignId = campaign.id;
 
-  // Upload videos and create creatives/ads in parallel
   const [resultA, resultB] = await Promise.all([
-    setupAdset(opts.ad_account_id, opts.page_id, campaignId, urlA, opts.model_a, opts.daily_budget, opts.targeting),
-    setupAdset(opts.ad_account_id, opts.page_id, campaignId, urlB, opts.model_b, opts.daily_budget, opts.targeting),
+    setupAdset(campaignId, urlA, modelA, opts),
+    setupAdset(campaignId, urlB, modelB, opts),
   ]);
 
   await updateAbTest(testId, {
@@ -136,29 +127,28 @@ async function launchWhenReady(
 }
 
 async function setupAdset(
-  adAccountId: string,
-  pageId: string,
   campaignId: string,
   videoUrl: string,
   modelName: string,
-  dailyBudget: number,
-  targeting: unknown
+  opts: { page_id: string; daily_budget: number; link: string; thumbnail_url?: string }
 ) {
-  const videoId = await uploadVideoFromUrl(adAccountId, videoUrl);
-  const creative = await createVideoCreative(adAccountId, {
+  const video = await uploadVideoFromUrl(videoUrl, `abtest-${modelName}`);
+  const creative = await createVideoCreative({
     name: `Creative-${modelName}`,
-    video_id: videoId,
-    page_id: pageId,
+    page_id: opts.page_id,
+    video_id: video.id,
+    thumbnail_url: opts.thumbnail_url || "",
     message: "",
+    link: opts.link,
   });
-  const adset = await createAdset(adAccountId, {
+  const adset = await createAdset({
     name: `Adset-${modelName}`,
     campaign_id: campaignId,
-    daily_budget: dailyBudget,
-    targeting: targeting ?? { age_min: 18, age_max: 65 },
+    daily_budget: opts.daily_budget,
+    page_id: opts.page_id,
     status: "ACTIVE",
   });
-  const ad = await createAd(adAccountId, {
+  const ad = await createAd({
     name: `Ad-${modelName}`,
     adset_id: adset.id,
     creative_id: creative.id,
