@@ -1,38 +1,14 @@
 import { createClient } from "@supabase/supabase-js";
 
-export const db = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
 
-export interface GeneratedVideo {
-  id: string;
-  job_id: string;
-  status: string;
-  url?: string;
-  script?: string;
-  product_id?: string;
-  created_at: string;
-}
+export const db: any = url && key ? createClient(url, key) : null;
+function requireDb() { if (!db) throw new Error("Supabase not configured"); return db; }
 
-export interface ScrapedAd {
-  id: string;
-  platform: string;
-  advertiser: string;
-  url: string;
-  script?: string;
-  score?: number;
-  created_at: string;
-}
-
-export interface Campaign {
-  id: string;
-  meta_campaign_id: string;
-  name: string;
-  status: string;
-  budget?: number;
-  created_at: string;
-}
+export interface GeneratedVideo { id?: string; [k: string]: any }
+export interface ScrapedAd { id?: string; [k: string]: any }
+export interface Campaign { id?: string; [k: string]: any }
 
 export interface Draft {
   id: string;
@@ -53,7 +29,7 @@ export interface Draft {
 }
 
 export async function saveVideo(data: Partial<GeneratedVideo>) {
-  const { data: row, error } = await db
+  const { data: row, error } = await requireDb()
     .from("generated_videos")
     .insert(data)
     .select()
@@ -63,7 +39,7 @@ export async function saveVideo(data: Partial<GeneratedVideo>) {
 }
 
 export async function updateVideo(id: string, data: Partial<GeneratedVideo>) {
-  const { data: row, error } = await db
+  const { data: row, error } = await requireDb()
     .from("generated_videos")
     .update(data)
     .eq("id", id)
@@ -74,7 +50,7 @@ export async function updateVideo(id: string, data: Partial<GeneratedVideo>) {
 }
 
 export async function saveAd(data: Partial<ScrapedAd>) {
-  const { data: row, error } = await db
+  const { data: row, error } = await requireDb()
     .from("scraped_ads")
     .insert(data)
     .select()
@@ -84,7 +60,7 @@ export async function saveAd(data: Partial<ScrapedAd>) {
 }
 
 export async function saveCampaign(data: Partial<Campaign>) {
-  const { data: row, error } = await db
+  const { data: row, error } = await requireDb()
     .from("campaigns")
     .insert(data)
     .select()
@@ -93,18 +69,31 @@ export async function saveCampaign(data: Partial<Campaign>) {
   return row as Campaign;
 }
 
-export async function listAll<T>(table: string): Promise<T[]> {
-  const { data, error } = await db
-    .from(table)
-    .select("*")
-    .order("created_at", { ascending: false });
-  if (error) throw error;
-  return (data ?? []) as T[];
+// Overload: listAll() returns the dashboard bundle. listAll(table) returns rows.
+export async function listAll(): Promise<{ videos: any[]; ads: any[]; campaigns: any[] } | null>;
+export async function listAll<T>(table: string): Promise<T[]>;
+export async function listAll<T>(table?: string): Promise<any> {
+  if (!db) return table ? [] : null;
+  if (table) {
+    const { data, error } = await db.from(table).select("*").order("created_at", { ascending: false });
+    if (error) throw error;
+    return (data ?? []) as T[];
+  }
+  const [videos, ads, campaigns] = await Promise.all([
+    db.from("generated_videos").select("*").order("created_at", { ascending: false }),
+    db.from("scraped_ads").select("*").order("created_at", { ascending: false }),
+    db.from("campaigns").select("*").order("created_at", { ascending: false }),
+  ]);
+  return {
+    videos: videos.data || [],
+    ads: ads.data || [],
+    campaigns: campaigns.data || [],
+  };
 }
 
 // Draft-specific helpers
 export async function saveDraft(data: Partial<Draft>): Promise<Draft> {
-  const { data: row, error } = await db
+  const { data: row, error } = await requireDb()
     .from("drafts")
     .insert({ ...data, updated_at: new Date().toISOString() })
     .select()
@@ -114,7 +103,7 @@ export async function saveDraft(data: Partial<Draft>): Promise<Draft> {
 }
 
 export async function updateDraft(id: string, data: Partial<Draft>): Promise<Draft> {
-  const { data: row, error } = await db
+  const { data: row, error } = await requireDb()
     .from("drafts")
     .update({ ...data, updated_at: new Date().toISOString() })
     .eq("id", id)
@@ -135,7 +124,7 @@ export async function getDraft(id: string): Promise<Draft | null> {
 }
 
 export async function listDrafts(status?: string): Promise<Draft[]> {
-  let query = db.from("drafts").select("*").order("created_at", { ascending: false });
+  let query = requireDb().from("drafts").select("*").order("created_at", { ascending: false });
   if (status) {
     query = query.eq("status", status);
   }

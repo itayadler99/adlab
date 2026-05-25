@@ -206,6 +206,11 @@ ${exportSummary}
 - ALLOWED npm packages (do NOT use any other): ${depList}
 - Output COMPLETE file content per changed file. No partial diffs.
 - Prefer ADD-only changes (new files). Modify existing files only if essential.
+- CRITICAL: NEVER change the signature of existing exported functions. Only ADD new exports or new optional params.
+- CRITICAL: NEVER remove or rename existing exports. Other files depend on them.
+- CRITICAL: When using a lib function, check the signature in the exports list above and match it EXACTLY.
+- For NEW DB tables: prefer a new lib file (e.g. lib/drafts.ts) rather than expanding lib/db.ts.
+- Keep file content under 8000 chars where possible. If a feature needs more, split into multiple smaller files.
 - No comments in JSON. No code fences. No prose outside the JSON.`;
 
     const user = `Implement this backlog item:
