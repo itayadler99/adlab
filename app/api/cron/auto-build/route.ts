@@ -16,6 +16,26 @@ const MODEL = "claude-sonnet-4-6";
 type FileOp = { path: string; action: "write" | "delete"; content?: string };
 type Plan = { summary: string; files: FileOp[] };
 
+// Brace-balanced extractor: finds first complete top-level {...} ignoring braces inside strings.
+function extractJSON(s: string): string | null {
+  const start = s.indexOf("{");
+  if (start === -1) return null;
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === '"') inStr = false;
+    } else {
+      if (c === '"') inStr = true;
+      else if (c === "{") depth++;
+      else if (c === "}") { depth--; if (depth === 0) return s.slice(start, i + 1); }
+    }
+  }
+  return null;
+}
+
 function gh(token: string, repo: string) {
   const base = `https://api.github.com/repos/${repo}`;
   const h = {
@@ -123,12 +143,12 @@ Return JSON.`;
   }
 
   const text = (resp.content.find((b: any) => b.type === "text") as any)?.text || "";
-  const m = text.match(/\{[\s\S]*\}/);
-  if (!m) return NextResponse.json({ error: "no_json", preview: text.slice(0, 400) }, { status: 500 });
+  const jsonStr = extractJSON(text);
+  if (!jsonStr) return NextResponse.json({ error: "no_json", preview: text.slice(0, 400) }, { status: 500 });
 
   let plan: Plan;
-  try { plan = JSON.parse(m[0]); }
-  catch (e: any) { return NextResponse.json({ error: "bad_json", detail: e.message }, { status: 500 }); }
+  try { plan = JSON.parse(jsonStr); }
+  catch (e: any) { return NextResponse.json({ error: "bad_json", detail: e.message, preview: jsonStr.slice(0, 400) }, { status: 500 }); }
 
   const summary = plan.summary || item;
   const commitMsg = `auto: ${summary}`;
