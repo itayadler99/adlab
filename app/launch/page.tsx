@@ -1,6 +1,15 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
 
+interface Store {
+  id: string;
+  name: string;
+  adAccountId: string;
+  pageId: string;
+  defaultLink?: string;
+  configured: boolean;
+}
+
 interface MetaCampaign {
   id: string;
   name: string;
@@ -50,6 +59,8 @@ const DEFAULT_FORM: LaunchForm = {
 };
 
 export default function LaunchPage() {
+  const [stores, setStores] = useState<Store[]>([]);
+  const [selectedStoreId, setSelectedStoreId] = useState("");
   const [campaigns, setCampaigns] = useState<MetaCampaign[]>([]);
   const [loadingCampaigns, setLoadingCampaigns] = useState(false);
   const [campaignsError, setCampaignsError] = useState("");
@@ -76,7 +87,24 @@ export default function LaunchPage() {
 
   useEffect(() => {
     fetchCampaigns();
+    fetch("/api/stores")
+      .then((r) => r.json())
+      .then((j) => setStores(j.stores ?? []))
+      .catch(() => {});
   }, [fetchCampaigns]);
+
+  const handleSelectStore = (id: string) => {
+    setSelectedStoreId(id);
+    const s = stores.find((x) => x.id === id);
+    if (!s) return;
+    setForm((prev) => ({
+      ...prev,
+      adAccountId: s.adAccountId || prev.adAccountId,
+      pageId: s.pageId || prev.pageId,
+      targetUrl: s.defaultLink || prev.targetUrl,
+    }));
+    setShowClonePanel(true);
+  };
 
   const handleSelectCampaign = (id: string) => {
     setSelectedCampaignId(id);
@@ -139,6 +167,26 @@ export default function LaunchPage() {
         <div>
           <h1 className="text-3xl font-bold text-white">Launch Campaign</h1>
           <p className="text-gray-400 mt-1">Select an existing Meta campaign to clone and edit, or create a new one.</p>
+        </div>
+
+        {/* Store Picker */}
+        <div className="bg-gray-900 rounded-xl p-6 space-y-3">
+          <h2 className="text-lg font-semibold text-white">Store</h2>
+          <select
+            value={selectedStoreId}
+            onChange={(e) => handleSelectStore(e.target.value)}
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="">— Pick a store —</option>
+            {stores.map((s) => (
+              <option key={s.id} value={s.id} disabled={!s.configured}>
+                {s.name}{s.configured ? "" : " (not configured)"}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-gray-500">
+            Selecting a store auto-fills ad account, page, and target URL.
+          </p>
         </div>
 
         {/* Existing Campaigns */}

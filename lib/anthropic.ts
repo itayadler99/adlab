@@ -52,6 +52,39 @@ Write the ad.`;
   return JSON.parse(m[0]);
 }
 
+export async function writeHeadlines(opts: {
+  productTitle: string;
+  productDescription?: string;
+  language?: "he" | "en";
+}): Promise<{ headlines: string[] }> {
+  const lang = opts.language || "he";
+  const sys = `You are Itay's senior Hebrew copywriter. Output strict JSON only:
+{"headlines": ["...", "...", "..."]}
+
+Itay style rules (HARD):
+- ${lang === "he" ? "Hebrew only, proper spelling (no slang)" : "English only"}
+- NO em-dashes (—), NO dashes (-) inside sentences
+- Generic time pressure phrases ("רק היום", "מלאי אחרון") — NEVER specific dates
+- Each headline ≤ 7 words
+- 3 distinct angles: benefit / urgency / curiosity`;
+
+  const user = `Product: ${opts.productTitle}
+${opts.productDescription ? `Description: ${opts.productDescription}` : ""}
+
+Write 3 headline variants.`;
+
+  const res = await anthropic().messages.create({
+    model: MODEL,
+    max_tokens: 512,
+    system: sys,
+    messages: [{ role: "user", content: user }],
+  });
+  const text = (res.content[0] as { type: "text"; text: string }).text;
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error("No JSON in Claude output");
+  return JSON.parse(m[0]);
+}
+
 export async function scoreAd(opts: {
   transcript: string;
   visual_description?: string;
