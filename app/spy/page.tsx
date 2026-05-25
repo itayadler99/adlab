@@ -1,293 +1,312 @@
 "use client";
+
 import { useState } from "react";
 
-interface SpyAd {
-  id?: string;
-  pageName?: string;
-  adArchiveId?: string;
-  startDate?: string;
-  status?: string;
-  snapshot?: {
-    title?: string;
-    body?: string;
-    images?: { originalImageUrl?: string }[];
-    videos?: { videoSdUrl?: string; thumbnailUrl?: string }[];
-    linkUrl?: string;
-  };
-  spend?: { lowerBound?: string; upperBound?: string };
-  impressions?: { lowerBound?: string; upperBound?: string };
+type Stage = "idle" | "fetching" | "transcribing" | "scoring" | "done" | "error";
+
+interface ScoreResult {
+  score: number;
+  hook?: string;
+  cta?: string;
+  emotion?: string;
+  clarity?: string;
+  overall?: string;
+  [key: string]: unknown;
 }
 
-interface MetaAd {
-  id?: string;
-  creative?: { title?: string; body?: string; image_url?: string };
-  insights?: { data?: { impressions?: string; spend?: string }[] };
+interface PipelineResult {
+  videoUrl?: string;
+  transcript?: string;
+  score?: ScoreResult;
+  error?: string;
 }
 
 export default function SpyPage() {
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<MetaAd[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [adUrl, setAdUrl] = useState("");
+  const [videoUrlOverride, setVideoUrlOverride] = useState("");
+  const [showVideoOverride, setShowVideoOverride] = useState(false);
+  const [stage, setStage] = useState<Stage>("idle");
+  const [result, setResult] = useState<PipelineResult | null>(null);
   const [error, setError] = useState("");
 
-  // Scrape panel state
-  const [scrapeOpen, setScrapeOpen] = useState(false);
-  const [scrapeTerms, setScrapeTerms] = useState("");
-  const [scrapePageIds, setScrapePageIds] = useState("");
-  const [scrapeCountry, setScrapeCountry] = useState("US");
-  const [scrapeMax, setScrapeMax] = useState(20);
-  const [scrapeLoading, setScrapeLoading] = useState(false);
-  const [scrapeError, setScrapeError] = useState("");
-  const [scrapeAds, setScrapeAds] = useState<SpyAd[]>([]);
-  const [scrapeRunId, setScrapeRunId] = useState("");
-  const [scrapeStatus, setScrapeStatus] = useState("");
+  const stageLabel: Record<Stage, string> = {
+    idle: "",
+    fetching: "Fetching video from Ad Library…",
+    transcribing: "Transcribing audio…",
+    scoring: "Scoring ad with AI…",
+    done: "Done!",
+    error: "Error",
+  };
 
-  async function handleSearch(e: React.FormEvent) {
-    e.preventDefault();
-    setLoading(true);
-    setError("");
-    try {
-      const res = await fetch(`/api/spy?q=${encodeURIComponent(query)}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Search failed");
-      setResults(data.ads ?? []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
+  const progressPct: Record<Stage, number> = {
+    idle: 0,
+    fetching: 25,
+    transcribing: 55,
+    scoring: 80,
+    done: 100,
+    error: 0,
+  };
+
+  async function runPipeline() {
+    const trimmedUrl = adUrl.trim();
+    const trimmedVideo = videoUrlOverride.trim();
+
+    if (!trimmedUrl && !trimmedVideo) {
+      setError("Paste a Facebook Ad Library URL or a direct video URL.");
+      return;
     }
-  }
 
-  async function handleScrape(e: React.FormEvent) {
-    e.preventDefault();
-    setScrapeLoading(true);
-    setScrapeError("");
-    setScrapeAds([]);
-    setScrapeRunId("");
-    setScrapeStatus("");
+    setError("");
+    setResult(null);
+    setStage("fetching");
+
     try {
-      const input: Record<string, unknown> = {
-        country: scrapeCountry,
-        maxResults: scrapeMax,
-        async: true,
-      };
-      if (scrapeTerms.trim()) input.searchTerms = scrapeTerms.split(",").map((s) => s.trim()).filter(Boolean);
-      if (scrapePageIds.trim()) input.searchPageIDs = scrapePageIds.split(",").map((s) => s.trim()).filter(Boolean);
+      const body: Record<string, string> = {};
+      if (trimmedUrl) body.url = trimmedUrl;
+      if (trimmedVideo) body.videoUrl = trimmedVideo;
 
-      const res = await fetch("/api/spy/scrape", {
+      const res = await fetch("/api/spy", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(input),
+        body: JSON.stringify(body),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Scrape failed");
-      setScrapeRunId(data.runId);
-      setScrapeStatus("RUNNING");
-      pollForResults(data.runId);
-    } catch (err) {
-      setScrapeError(err instanceof Error ? err.message : String(err));
-      setScrapeLoading(false);
+
+      // Update stages based on timing (the API is sequential, so we animate)
+      // We show transcribing after a small delay since we can't stream
+      const transcribeTimer = setTimeout(() => setStage("transcribing"), 2000);
+      const scoreTimer = setTimeout(() => setStage("scoring"), 8000);
+
+      const data: PipelineResult & { success?: boolean } = await res.json();
+
+      clearTimeout(transcribeTimer);
+      clearTimeout(scoreTimer);
+
+      if (!res.ok || data.error) {
+        setError(data.error || "Pipeline failed.");
+        setStage("error");
+        setResult(data);
+
+        // If video extraction failed, offer manual override
+        if (res.status === 422) {
+          setShowVideoOverride(true);
+        }
+        return;
+      }
+
+      setResult(data);
+      setStage("done");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Network error");
+      setStage("error");
     }
   }
 
-  async function pollForResults(runId: string) {
-    const maxAttempts = 30;
-    for (let i = 0; i < maxAttempts; i++) {
-      await new Promise((r) => setTimeout(r, 5000));
-      try {
-        const res = await fetch(`/api/spy/scrape?runId=${encodeURIComponent(runId)}`);
-        const data = await res.json();
-        setScrapeStatus(data.status);
-        if (data.status === "SUCCEEDED") {
-          setScrapeAds(data.ads ?? []);
-          setScrapeLoading(false);
-          return;
-        }
-        if (["FAILED", "ABORTED", "TIMED-OUT"].includes(data.status)) {
-          setScrapeError(`Run ended with status: ${data.status}`);
-          setScrapeLoading(false);
-          return;
-        }
-      } catch {
-        // keep polling
-      }
-    }
-    setScrapeError("Polling timed out. Run may still be in progress.");
-    setScrapeLoading(false);
-  }
+  const isRunning = stage === "fetching" || stage === "transcribing" || stage === "scoring";
+
+  const scoreColor = (s?: number) => {
+    if (!s) return "text-zinc-400";
+    if (s >= 8) return "text-emerald-400";
+    if (s >= 5) return "text-yellow-400";
+    return "text-red-400";
+  };
 
   return (
-    <main className="min-h-screen bg-gray-950 text-gray-100 p-8">
-      <h1 className="text-3xl font-bold mb-8">Ad Spy</h1>
-
-      {/* Meta Ad Library Search */}
-      <section className="mb-10">
-        <h2 className="text-xl font-semibold mb-3">Meta Ad Library Search</h2>
-        <form onSubmit={handleSearch} className="flex gap-3 mb-4">
-          <input
-            className="flex-1 bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm outline-none focus:border-indigo-500"
-            placeholder="Search ads by keyword..."
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          <button
-            type="submit"
-            disabled={loading || !query.trim()}
-            className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 px-5 py-2 rounded text-sm font-medium transition-colors"
-          >
-            {loading ? "Searching…" : "Search"}
-          </button>
-        </form>
-
-        {error && <p className="text-red-400 text-sm mb-4">{error}</p>}
-
-        {results.length > 0 && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {results.map((ad, i) => (
-              <div key={ad.id ?? i} className="bg-gray-800 rounded-lg p-4 border border-gray-700">
-                {ad.creative?.image_url && (
-                  <img src={ad.creative.image_url} alt="ad" className="w-full h-36 object-cover rounded mb-3" />
-                )}
-                <p className="font-semibold text-sm mb-1">{ad.creative?.title ?? "No title"}</p>
-                <p className="text-gray-400 text-xs line-clamp-3">{ad.creative?.body ?? ""}</p>
-                {ad.insights?.data?.[0] && (
-                  <div className="mt-3 flex gap-4 text-xs text-gray-500">
-                    <span>Impressions: {ad.insights.data[0].impressions ?? "—"}</span>
-                    <span>Spend: ${ad.insights.data[0].spend ?? "—"}</span>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* Apify Scrape */}
-      <section>
-        <div className="flex items-center gap-4 mb-4">
-          <h2 className="text-xl font-semibold">Facebook Ad Library Scraper</h2>
-          <button
-            onClick={() => setScrapeOpen((o) => !o)}
-            className="bg-emerald-700 hover:bg-emerald-600 px-4 py-2 rounded text-sm font-medium transition-colors"
-          >
-            {scrapeOpen ? "Hide Scraper" : "Scrape URL"}
-          </button>
+    <main className="min-h-screen bg-zinc-950 text-zinc-100 p-6 md:p-10">
+      <div className="max-w-2xl mx-auto space-y-8">
+        {/* Header */}
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Ad Spy</h1>
+          <p className="mt-1 text-zinc-400 text-sm">
+            Paste a Facebook Ad Library URL — we&apos;ll fetch the video, transcribe it, and
+            score it with AI in one click.
+          </p>
         </div>
 
-        {scrapeOpen && (
-          <div className="bg-gray-800 border border-gray-700 rounded-lg p-6 mb-6">
-            <form onSubmit={handleScrape} className="space-y-4">
-              <div>
-                <label className="block text-xs text-gray-400 mb-1">Search Terms (comma-separated)</label>
-                <input
-                  className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm outline-none focus:border-emerald-500"
-                  placeholder="nike, running shoes, sportswear"
-                  value={scrapeTerms}
-                  onChange={(e) => setScrapeTerms(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-400 mb-1">Page IDs (comma-separated, optional)</label>
-                <input
-                  className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm outline-none focus:border-emerald-500"
-                  placeholder="123456789, 987654321"
-                  value={scrapePageIds}
-                  onChange={(e) => setScrapePageIds(e.target.value)}
-                />
-              </div>
-              <div className="flex gap-4">
-                <div className="flex-1">
-                  <label className="block text-xs text-gray-400 mb-1">Country</label>
-                  <select
-                    className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm outline-none focus:border-emerald-500"
-                    value={scrapeCountry}
-                    onChange={(e) => setScrapeCountry(e.target.value)}
-                  >
-                    <option value="US">US</option>
-                    <option value="GB">GB</option>
-                    <option value="CA">CA</option>
-                    <option value="AU">AU</option>
-                    <option value="DE">DE</option>
-                    <option value="FR">FR</option>
-                  </select>
-                </div>
-                <div className="flex-1">
-                  <label className="block text-xs text-gray-400 mb-1">Max Results</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={200}
-                    className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm outline-none focus:border-emerald-500"
-                    value={scrapeMax}
-                    onChange={(e) => setScrapeMax(Number(e.target.value))}
-                  />
-                </div>
-              </div>
-              <button
-                type="submit"
-                disabled={scrapeLoading || (!scrapeTerms.trim() && !scrapePageIds.trim())}
-                className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 px-6 py-2 rounded text-sm font-medium transition-colors"
-              >
-                {scrapeLoading ? "Scraping…" : "Start Scrape"}
-              </button>
-            </form>
+        {/* Input */}
+        <div className="space-y-3">
+          <label className="block text-sm font-medium text-zinc-300">
+            Facebook Ad Library URL
+          </label>
+          <input
+            type="url"
+            value={adUrl}
+            onChange={(e) => setAdUrl(e.target.value)}
+            placeholder="https://www.facebook.com/ads/library/?id=123456789"
+            disabled={isRunning}
+            className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-3 text-sm placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50"
+          />
 
-            {scrapeError && <p className="text-red-400 text-sm mt-3">{scrapeError}</p>}
+          {/* Manual video URL toggle */}
+          {(showVideoOverride || videoUrlOverride) && (
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-zinc-300">
+                Direct video URL{" "}
+                <span className="text-zinc-500 font-normal">(optional — paste if auto-fetch fails)</span>
+              </label>
+              <input
+                type="url"
+                value={videoUrlOverride}
+                onChange={(e) => setVideoUrlOverride(e.target.value)}
+                placeholder="https://video.xx.fbcdn.net/..."
+                disabled={isRunning}
+                className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-3 text-sm placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50"
+              />
+            </div>
+          )}
 
-            {scrapeRunId && (
-              <div className="mt-4 text-xs text-gray-400">
-                <span>Run ID: <code className="text-gray-300">{scrapeRunId}</code></span>
-                <span className="ml-4">Status: <span className={scrapeStatus === "SUCCEEDED" ? "text-emerald-400" : "text-yellow-400"}>{scrapeStatus}</span></span>
+          {!showVideoOverride && !videoUrlOverride && (
+            <button
+              onClick={() => setShowVideoOverride(true)}
+              className="text-xs text-zinc-500 hover:text-violet-400 transition-colors"
+            >
+              + Paste direct video URL instead
+            </button>
+          )}
+        </div>
+
+        {/* CTA */}
+        <button
+          onClick={runPipeline}
+          disabled={isRunning}
+          className="w-full bg-violet-600 hover:bg-violet-500 disabled:bg-violet-900 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-lg transition-colors text-sm"
+        >
+          {isRunning ? "Analysing…" : "Analyse Ad"}
+        </button>
+
+        {/* Progress bar */}
+        {stage !== "idle" && stage !== "error" && (
+          <div className="space-y-2">
+            <div className="flex justify-between text-xs text-zinc-400">
+              <span>{stageLabel[stage]}</span>
+              <span>{progressPct[stage]}%</span>
+            </div>
+            <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-violet-500 rounded-full transition-all duration-700"
+                style={{ width: `${progressPct[stage]}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Error */}
+        {error && (
+          <div className="bg-red-950 border border-red-800 text-red-300 rounded-lg p-4 text-sm">
+            <strong>Error:</strong> {error}
+          </div>
+        )}
+
+        {/* Results */}
+        {result && stage === "done" && (
+          <div className="space-y-6">
+            {/* Video */}
+            {result.videoUrl && (
+              <div className="space-y-2">
+                <h2 className="text-sm font-semibold text-zinc-300 uppercase tracking-wider">
+                  Video
+                </h2>
+                <video
+                  src={result.videoUrl}
+                  controls
+                  className="w-full rounded-lg border border-zinc-800 bg-zinc-900"
+                />
+                <a
+                  href={result.videoUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-violet-400 hover:underline break-all"
+                >
+                  {result.videoUrl}
+                </a>
               </div>
             )}
-          </div>
-        )}
 
-        {scrapeAds.length > 0 && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {scrapeAds.map((ad, i) => {
-              const thumb = ad.snapshot?.videos?.[0]?.thumbnailUrl ?? ad.snapshot?.images?.[0]?.originalImageUrl;
-              return (
-                <div key={ad.adArchiveId ?? i} className="bg-gray-800 rounded-lg p-4 border border-gray-700">
-                  {thumb && (
-                    <img src={thumb} alt="ad thumbnail" className="w-full h-36 object-cover rounded mb-3" />
-                  )}
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-semibold text-emerald-400">{ad.pageName ?? "Unknown Page"}</span>
-                    {ad.status && (
-                      <span className={`text-xs px-2 py-0.5 rounded-full ${
-                        ad.status === "ACTIVE" ? "bg-emerald-900 text-emerald-300" : "bg-gray-700 text-gray-400"
-                      }`}>{ad.status}</span>
-                    )}
-                  </div>
-                  <p className="font-semibold text-sm mb-1">{ad.snapshot?.title ?? "No title"}</p>
-                  <p className="text-gray-400 text-xs line-clamp-3">{ad.snapshot?.body ?? ""}</p>
-                  {ad.snapshot?.linkUrl && (
-                    <a
-                      href={ad.snapshot.linkUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-indigo-400 text-xs mt-2 block truncate hover:underline"
-                    >
-                      {ad.snapshot.linkUrl}
-                    </a>
-                  )}
-                  {(ad.spend?.lowerBound || ad.impressions?.lowerBound) && (
-                    <div className="mt-3 flex flex-wrap gap-3 text-xs text-gray-500">
-                      {ad.spend?.lowerBound && (
-                        <span>Spend: ${ad.spend.lowerBound}–${ad.spend.upperBound ?? "?"}</span>
-                      )}
-                      {ad.impressions?.lowerBound && (
-                        <span>Impressions: {ad.impressions.lowerBound}–{ad.impressions.upperBound ?? "?"}</span>
-                      )}
-                    </div>
+            {/* Score */}
+            {result.score && (
+              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-sm font-semibold text-zinc-300 uppercase tracking-wider">
+                    AI Score
+                  </h2>
+                  <span
+                    className={`text-3xl font-black ${
+                      scoreColor(result.score.score)
+                    }`}
+                  >
+                    {result.score.score ?? "—"}
+                    <span className="text-base font-normal text-zinc-500">/10</span>
+                  </span>
+                </div>
+
+                {/* Score dimensions */}
+                <div className="grid grid-cols-2 gap-3">
+                  {(["hook", "cta", "emotion", "clarity"] as const).map((key) =>
+                    result.score?.[key] ? (
+                      <div
+                        key={key}
+                        className="bg-zinc-800 rounded-lg p-3 space-y-0.5"
+                      >
+                        <p className="text-xs uppercase tracking-wider text-zinc-500">
+                          {key}
+                        </p>
+                        <p className="text-sm text-zinc-200">{String(result.score![key])}</p>
+                      </div>
+                    ) : null
                   )}
                 </div>
-              );
-            })}
+
+                {result.score.overall && (
+                  <div className="bg-zinc-800 rounded-lg p-3">
+                    <p className="text-xs uppercase tracking-wider text-zinc-500 mb-1">
+                      Overall feedback
+                    </p>
+                    <p className="text-sm text-zinc-200 leading-relaxed">
+                      {result.score.overall}
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Transcript */}
+            {result.transcript && (
+              <div className="space-y-2">
+                <h2 className="text-sm font-semibold text-zinc-300 uppercase tracking-wider">
+                  Transcript
+                </h2>
+                <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 text-sm text-zinc-300 leading-relaxed max-h-60 overflow-y-auto whitespace-pre-wrap">
+                  {result.transcript}
+                </div>
+              </div>
+            )}
+
+            {/* Use this as inspiration */}
+            <div className="flex gap-3">
+              <a
+                href={`/generate?inspiration=${encodeURIComponent(
+                  result.transcript || ""
+                )}`}
+                className="flex-1 text-center bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm font-medium py-2.5 rounded-lg transition-colors"
+              >
+                Use as inspiration →
+              </a>
+              <button
+                onClick={() => {
+                  setStage("idle");
+                  setResult(null);
+                  setError("");
+                  setAdUrl("");
+                  setVideoUrlOverride("");
+                  setShowVideoOverride(false);
+                }}
+                className="flex-1 text-center bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm font-medium py-2.5 rounded-lg transition-colors"
+              >
+                Analyse another
+              </button>
+            </div>
           </div>
         )}
-      </section>
+      </div>
     </main>
   );
 }
