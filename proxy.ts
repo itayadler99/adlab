@@ -4,7 +4,7 @@ export const config = {
   matcher: "/((?!_next|favicon|api/health).*)",
 };
 
-export function middleware(req: NextRequest) {
+export function proxy(req: NextRequest) {
   const expected = process.env.ADLAB_PASSWORD;
   if (!expected) return NextResponse.next(); // open if unset
 
