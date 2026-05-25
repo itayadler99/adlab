@@ -1,57 +1,75 @@
-// Video generation — Replicate REST (Higgsfield has no public REST yet)
-const REPLICATE_BASE = "https://api.replicate.com/v1";
+import Replicate from "replicate";
 
-function token() {
-  const t = process.env.REPLICATE_API_TOKEN;
-  if (!t) throw new Error("REPLICATE_API_TOKEN not set");
-  return t;
-}
-
-export type VideoModel = "kling-1.6" | "veo-3" | "seedance-1.0-pro";
-
-const MODEL_MAP: Record<VideoModel, string> = {
-  "kling-1.6": "kwaivgi/kling-v1.6-pro",
-  "veo-3": "google/veo-3",
-  "seedance-1.0-pro": "bytedance/seedance-1-pro",
-};
+export type VideoModel = "minimax" | "kling-1.6" | "sora-2";
 
 export interface VideoJob {
   id: string;
-  status: "starting" | "processing" | "succeeded" | "failed" | "canceled";
-  output?: string | string[];
-  error?: string;
-  urls?: { get: string; cancel: string };
-}
-
-export async function startVideo(opts: {
   model: VideoModel;
-  prompt: string;
-  reference_image_url?: string;
-  duration?: number;
-  aspect_ratio?: "9:16" | "16:9" | "1:1";
-}): Promise<VideoJob> {
-  const input: Record<string, any> = {
-    prompt: opts.prompt,
-    duration: opts.duration || 10,
-    aspect_ratio: opts.aspect_ratio || "9:16",
-  };
-  if (opts.reference_image_url) input.image = opts.reference_image_url;
-
-  const res = await fetch(`${REPLICATE_BASE}/models/${MODEL_MAP[opts.model]}/predictions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token()}`,
-      "Content-Type": "application/json",
-      Prefer: "wait=0",
-    },
-    body: JSON.stringify({ input }),
-  });
-  return res.json();
+  status: "pending" | "processing" | "succeeded" | "failed";
+  videoUrl?: string;
+  error?: string;
 }
 
-export async function pollVideo(id: string): Promise<VideoJob> {
-  const res = await fetch(`${REPLICATE_BASE}/predictions/${id}`, {
-    headers: { Authorization: `Bearer ${token()}` },
+const replicate = new Replicate({ auth: process.env.REPLICATE_API_TOKEN });
+
+export async function startVideo(
+  prompt: string,
+  model: VideoModel = "minimax"
+): Promise<VideoJob> {
+  if (model === "sora-2") {
+    throw new Error(
+      "Sora-2 REST API is not yet publicly available. Please use minimax or kling-1.6."
+    );
+  }
+
+  const modelMap: Record<Exclude<VideoModel, "sora-2">, `${string}/${string}`> = {
+    minimax: "minimax/video-01",
+    "kling-1.6": "kwaivgi/kling-v1.6-standard",
+  };
+
+  const replicateModel = modelMap[model as Exclude<VideoModel, "sora-2">];
+
+  const prediction = await (replicate.predictions.create as Function)({
+    model: replicateModel,
+    input: { prompt },
   });
-  return res.json();
+
+  return {
+    id: prediction.id,
+    model,
+    status: "pending",
+  };
+}
+
+export async function pollVideo(jobId: string, model: VideoModel): Promise<VideoJob> {
+  if (model === "sora-2") {
+    throw new Error(
+      "Sora-2 REST API is not yet publicly available."
+    );
+  }
+
+  const prediction = await replicate.predictions.get(jobId);
+
+  const status = prediction.status as string;
+
+  let mappedStatus: VideoJob["status"] = "processing";
+  if (status === "succeeded") mappedStatus = "succeeded";
+  else if (status === "failed" || status === "canceled") mappedStatus = "failed";
+  else if (status === "starting" || status === "processing") mappedStatus = "processing";
+
+  const output = prediction.output as string | string[] | null;
+  const videoUrl =
+    typeof output === "string"
+      ? output
+      : Array.isArray(output)
+      ? output[0]
+      : undefined;
+
+  return {
+    id: jobId,
+    model,
+    status: mappedStatus,
+    videoUrl,
+    error: prediction.error ? String(prediction.error) : undefined,
+  };
 }
