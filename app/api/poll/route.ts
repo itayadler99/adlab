@@ -12,8 +12,7 @@ export async function GET(req: Request) {
   try {
     const job = await pollVideo(id);
     if (job.status === "succeeded" || job.status === "failed") {
-      const url = Array.isArray(job.output) ? job.output[0] : job.output;
-      await updateVideo(id, { status: job.status, video_url: url });
+      await updateVideo(id, { status: job.status, video_url: job.videoUrl });
     }
     return NextResponse.json(job);
   } catch (e: any) {

@@ -41,29 +41,16 @@ export async function startVideo(
   };
 }
 
-export async function pollVideo(jobId: string, model: VideoModel): Promise<VideoJob> {
-  if (model === "sora-2") {
-    throw new Error(
-      "Sora-2 REST API is not yet publicly available."
-    );
-  }
-
+export async function pollVideo(jobId: string, model: VideoModel = "minimax"): Promise<VideoJob> {
   const prediction = await replicate.predictions.get(jobId);
-
   const status = prediction.status as string;
 
   let mappedStatus: VideoJob["status"] = "processing";
   if (status === "succeeded") mappedStatus = "succeeded";
   else if (status === "failed" || status === "canceled") mappedStatus = "failed";
-  else if (status === "starting" || status === "processing") mappedStatus = "processing";
 
   const output = prediction.output as string | string[] | null;
-  const videoUrl =
-    typeof output === "string"
-      ? output
-      : Array.isArray(output)
-      ? output[0]
-      : undefined;
+  const videoUrl = typeof output === "string" ? output : Array.isArray(output) ? output[0] : undefined;
 
   return {
     id: jobId,
