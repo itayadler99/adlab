@@ -14,15 +14,11 @@ async function tryApify(
   if (!token) return null;
 
   try {
-    const { runActor } = await import("@/lib/apify");
-    // Use the facebook-ad-library actor if available
-    const result = await runActor(
-      "apify/facebook-ads-scraper",
-      { startUrls: [{ url: originalUrl }], maxItems: 1 },
-      token
-    );
+    const { scrapeAdLibrary } = await import("@/lib/apify");
+    const idMatch = originalUrl.match(/[?&]id=(\d+)/);
+    const result = await scrapeAdLibrary({ adArchiveId: idMatch?.[1], country: "US" });
     if (result && Array.isArray(result) && result.length > 0) {
-      const ad = result[0];
+      const ad = result[0] as any;
       return (
         ad?.videoUrl ||
         ad?.video_url ||

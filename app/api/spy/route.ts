@@ -103,7 +103,7 @@ export async function POST(req: NextRequest) {
     // Step 3: score
     let score: Awaited<ReturnType<typeof scoreAd>> | null = null;
     try {
-      score = await scoreAd(transcript);
+      score = await scoreAd({ transcript });
       steps.score = score;
     } catch (e: unknown) {
       return NextResponse.json(

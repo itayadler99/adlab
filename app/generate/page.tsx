@@ -1,6 +1,11 @@
 "use client";
 import { useState, useCallback } from "react";
-import { MODEL_MAP } from "@/lib/video";
+
+const MODEL_MAP: Record<string, string> = {
+  "kling-1.6": "kwaivgi/kling-v1.6-pro",
+  "veo-3": "google/veo-3",
+  "seedance-1.0-pro": "bytedance/seedance-1-pro",
+};
 
 type ScriptData = {
   script: string;

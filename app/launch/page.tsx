@@ -56,7 +56,7 @@ export default function LaunchPage() {
   const [selectedCampaignId, setSelectedCampaignId] = useState("");
   const [form, setForm] = useState<LaunchForm>(DEFAULT_FORM);
   const [launching, setLaunching] = useState(false);
-  const [result, setResult] = useState<{ success: boolean; message: string; data?: unknown } | null>(null);
+  const [result, setResult] = useState<{ success: boolean; message: string; data?: any } | null>(null);
   const [showClonePanel, setShowClonePanel] = useState(false);
 
   const fetchCampaigns = useCallback(async () => {

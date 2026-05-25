@@ -8,8 +8,7 @@ const MONTHLY_BUDGET_USD = 50;
 export async function GET() {
   try {
     const records = await listAll();
-
-    const videos = records.filter((r: any) => r.status !== undefined);
+    const videos: any[] = records?.videos || [];
     const totalGenerations = videos.length;
     const totalVideoCost = totalGenerations * VIDEO_COST_USD;
     const totalScriptCost = totalGenerations * SCRIPT_COST_USD;
