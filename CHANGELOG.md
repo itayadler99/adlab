@@ -1,5 +1,6 @@
 # Changelog
 
+- 2026-05-25 — Add Soul ID picker component for Higgsfield character avatars (stub with REST API ready)
 - 2026-05-25 — Add Sora-2 video model option (stub ready for REST API, UI badge)
 - 2026-05-25 — Add /api/cron/check-winners endpoint that scans Meta ROAS and alerts via webhook on ROAS > 3
 - 2026-05-25 — Convert / to public landing page, move dashboard to /app
