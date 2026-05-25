@@ -1,5 +1,6 @@
 # Changelog
 
+- 2026-05-25 — Add cost dashboard page with per-generation estimates, total burn, and monthly budget bar
 - 2026-05-25 — feat(/spy): one-click pipeline — paste FB Ad Library URL → fetch video → transcribe → score
 - 2026-05-25 — feat(/launch): pull existing Meta campaigns into dropdown with clone-and-edit support
 - 2026-05-25 — Add Variations button to /generate: re-render same script with different model/style
