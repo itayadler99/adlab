@@ -13,7 +13,7 @@ Auto-builder picks the TOP unchecked item every 12 hours.
 - [x] `/api/cron/check-winners` endpoint scans Meta ROAS, alerts on ROAS > 3 via webhook
 - [x] Add Sora-2 video option once REST is exposed (currently MCP-only)
 - [x] Add Soul ID picker (Higgsfield character avatars) once REST API opens up
-- [ ] Add A/B test launcher: 1 script → 2 video models → 2 Meta adsets, auto-compare ROAS after 5 days
+- [~] Add A/B test launcher: 1 script → 2 video models → 2 Meta adsets, auto-compare ROAS after 5 days <!-- lease:96hxe3 -->
 - [ ] Auto-write 3 headline variants per launch (Itay copy style: no em-dashes, generic time pressure)
 - [ ] Multi-store support: dropdown for Montier US / Sneakers / Studio / Treyzer
 - [ ] Add Klaviyo integration: push winning ads as email templates
