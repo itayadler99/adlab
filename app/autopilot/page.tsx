@@ -129,6 +129,7 @@ export default function AutopilotPage() {
   const [videoModel, setVideoModel] = useState<VideoModelChoice>("veo-3.1-fast");
   const [videoDuration, setVideoDuration] = useState(0); // 0 = auto-detect from competitor
   const [adMode, setAdMode] = useState<"auto" | "video" | "ugc" | "showcase">("auto");
+  const [postProcess, setPostProcess] = useState<"off" | "fast" | "speel">("fast");
   const [language, setLanguage] = useState<"en" | "he">("en");
   const [stage, setStage] = useState<Stage>("idle");
   const [error, setError] = useState("");
@@ -143,6 +144,10 @@ export default function AutopilotPage() {
   const [stitching, setStitching] = useState(false);
   const [stitchError, setStitchError] = useState("");
   const stitchTriggeredRef = useRef(false);
+  const [enhancedUrl, setEnhancedUrl] = useState<string | null>(null);
+  const [enhancing, setEnhancing] = useState(false);
+  const [enhanceError, setEnhanceError] = useState("");
+  const enhanceTriggeredRef = useRef(false);
   const pollersRef = useRef<number[]>([]);
   // UGC mode state
   const [ugcState, setUgcState] = useState<UgcState | null>(null);
@@ -154,7 +159,10 @@ export default function AutopilotPage() {
   const showcaseTickRef = useRef<number | null>(null);
   const showcaseAdvanceInFlightRef = useRef(false);
   const finalShowcaseUrl = showcaseState?.artifacts.videoUrl || null;
-  const videoUrl = finalShowcaseUrl || finalUgcUrl || stitchedUrl || videoUrls[0] || null;
+  // "Source" video — first cut from whichever pipeline produced it.
+  const sourceVideoUrl = finalShowcaseUrl || finalUgcUrl || stitchedUrl || videoUrls[0] || null;
+  // Preferred for player + launch — enhanced if postprocess succeeded, else source.
+  const videoUrl = enhancedUrl || sourceVideoUrl;
 
   function clearAllPollers() {
     for (const id of pollersRef.current) window.clearInterval(id);
@@ -424,6 +432,38 @@ export default function AutopilotPage() {
     })();
   }, [videoUrls, result]);
 
+  // Auto-postprocess once the pipeline produces a source video. Runs at most
+  // once per autopilot run; failures fall back to the source url silently.
+  useEffect(() => {
+    if (postProcess === "off") return;
+    if (enhanceTriggeredRef.current) return;
+    if (!sourceVideoUrl) return;
+    // If multi-clip, wait for the stitched url; otherwise process the single clip.
+    if (videoUrls.length > 1 && !stitchedUrl) return;
+    enhanceTriggeredRef.current = true;
+    setEnhancing(true);
+    setEnhanceError("");
+    (async () => {
+      try {
+        const res = await fetch("/api/postprocess", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: sourceVideoUrl, level: postProcess }),
+        });
+        const data = (await res.json()) as { url?: string; error?: string };
+        if (!res.ok || data.error || !data.url) {
+          setEnhanceError(data.error || "postprocess failed");
+        } else {
+          setEnhancedUrl(data.url);
+        }
+      } catch (e) {
+        setEnhanceError(e instanceof Error ? e.message : "postprocess network error");
+      } finally {
+        setEnhancing(false);
+      }
+    })();
+  }, [sourceVideoUrl, stitchedUrl, videoUrls.length, postProcess]);
+
   async function runAutopilot() {
     if (!competitorInput.trim()) {
       setError("הכנס כתובת מתחרה או שם מותג");
@@ -438,6 +478,10 @@ export default function AutopilotPage() {
     setLaunchInfo(null);
     setUgcState(null);
     setShowcaseState(null);
+    setEnhancedUrl(null);
+    setEnhancing(false);
+    setEnhanceError("");
+    enhanceTriggeredRef.current = false;
     clearUgcTick();
     clearShowcaseTick();
     setStage("scanning");
@@ -619,6 +663,21 @@ export default function AutopilotPage() {
                 סרטון רציף, ללא חתכים נראים. אוטומטי = מדדים את אורך הסרטון של המתחרה ומתאימים. עד 15 שניות מיוצר כקליפ אחד אחיד; מעל זה חיבור חלק עם המשכיות ויזואלית מלאה.
               </p>
             </div>
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-white/80">שיפור ריאליזם (פוסט-פרודקשן)</label>
+              <select
+                value={postProcess}
+                onChange={(e) => setPostProcess(e.target.value as "off" | "fast" | "speel")}
+                className="w-full bg-black border border-white/15 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
+              >
+                <option value="fast">מהיר — גרעין סרט + תיקון צבע (מומלץ)</option>
+                <option value="speel">מקסימום — אינטרפולציה ל-48fps + גרעין + צבע</option>
+                <option value="off">כבוי — סרטון גולמי בלי שיפור</option>
+              </select>
+              <p className="text-xs text-white/40">
+                מהיר: כ-10 שניות, חינם. מקסימום: כ-60 שניות, ~$0.05, סרטון חלק יותר וקרוב יותר ל-iPhone.
+              </p>
+            </div>
             <button
               onClick={runAutopilot}
               className="w-full bg-violet-600 hover:bg-violet-500 text-white font-semibold py-3 rounded-lg transition-colors"
@@ -645,7 +704,15 @@ export default function AutopilotPage() {
           <div className="space-y-6">
             {/* Status banner */}
             <div className="bg-violet-950/40 border border-violet-500/30 rounded-xl p-4 text-sm text-violet-200">
-              {!videoUrl ? STAGE_LABEL.rendering : "הוידאו מוכן — בדוק ואשר"}
+              {!videoUrl
+                ? STAGE_LABEL.rendering
+                : enhancing
+                  ? "מוסיף גרעין סרט ותיקון צבע..."
+                  : enhanceError
+                    ? `שיפור ריאליזם נכשל (משתמש בסרטון הגולמי): ${enhanceError}`
+                    : enhancedUrl
+                      ? "הסרטון משופר ומוכן — בדוק ואשר"
+                      : "הוידאו מוכן — בדוק ואשר"}
             </div>
 
             {/* UGC pipeline progress */}

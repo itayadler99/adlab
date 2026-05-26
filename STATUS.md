@@ -68,4 +68,35 @@ Blockers
 - None new. FAL `nano-banana/edit` and Replicate `seedance-1-pro` are
   both confirmed accessible in the current env.
 
-Next: Phase 3 — Post-processing (RIFE 24→48fps + grain + LUT).
+## Phase 3 — Post-processing ✅ done
+
+What changed
+- `lib/postprocess.ts` — `applyRealism(url, { level })` with three levels:
+  - `off` — passthrough.
+  - `fast` (default) — ffmpeg-static pass with film grain
+    (`noise=alls=10:allf=t`), a teal/orange curves filter, mild
+    saturation lift, and an `unsharp=5:5:0.7` pop. Uploads to Vercel Blob.
+  - `speel` — Replicate `pollinations/rife` 2x interp first (24→48fps),
+    then the ffmpeg pass.
+  - Any RIFE failure degrades gracefully to ffmpeg-only; any ffmpeg
+    failure returns the source URL untouched. The goal is "never block
+    the final ad".
+- `app/api/postprocess/route.ts` — POST `{ url, level }` → `{ url, trace }`.
+- `app/autopilot/page.tsx` — added a `postProcess` selector (default
+  "fast"). After the source video is ready (and stitched if multi-clip),
+  the client auto-POSTs to `/api/postprocess` and the player + launch
+  pipeline switch to the enhanced URL. Status banner reflects the pass.
+- Replaced the .cube LUT mentioned in BUILD_PROMPT with ffmpeg
+  `curves`/`eq` filters so we don't need to ship a binary LUT file.
+
+What was tested
+- `npx tsc --noEmit` clean; `npm run build` registers `/api/postprocess`.
+- End-to-end needs Vercel deploy + `BLOB_READ_WRITE_TOKEN` to write
+  the enhanced mp4 back to Blob.
+
+Blockers
+- Same `BLOB_READ_WRITE_TOKEN` requirement as Phase 1. Without it the
+  ffmpeg pass falls through and we serve the source URL.
+
+Next: Phase 4 — UGC composite quality (jewelry-grade prompts +
+vision-check fallback).
