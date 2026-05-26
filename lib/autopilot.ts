@@ -369,14 +369,21 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
   let videoTotalSeconds: number | undefined;
   let chosenModel: VideoModel | undefined;
   if (mode === "video") {
+    console.log("[autopilot] mode=video, style=", analysis.style, "product.imageUrl=", !!product.imageUrl);
     // Resolve duration: explicit user value > probed winner duration > 15s fallback.
     let chosenDuration = input.videoDuration && input.videoDuration > 0 ? input.videoDuration : undefined;
     if (!chosenDuration) {
       const winnerVideoUrl =
         winner.snapshot?.videos?.[0]?.videoHdUrl || winner.snapshot?.videos?.[0]?.videoSdUrl;
       if (winnerVideoUrl) {
-        const detected = await getVideoDurationSec(winnerVideoUrl);
-        if (detected) chosenDuration = Math.round(Math.min(60, Math.max(5, detected)));
+        console.log("[autopilot] probing winner duration:", winnerVideoUrl.slice(0, 80));
+        try {
+          const detected = await getVideoDurationSec(winnerVideoUrl);
+          if (detected) chosenDuration = Math.round(Math.min(60, Math.max(5, detected)));
+          console.log("[autopilot] detected duration:", detected, "→ chosenDuration:", chosenDuration);
+        } catch (e) {
+          console.warn("[autopilot] duration probe failed:", e instanceof Error ? e.message : e);
+        }
       }
       chosenDuration = chosenDuration ?? 15;
     }
@@ -391,6 +398,7 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
     } else {
       chosenModel = "kling-3.0";
     }
+    console.log("[autopilot] starting video sequence: model=", chosenModel, "duration=", chosenDuration);
     const sequence = await startVideoSequence(
       scriptOut.visual_prompt,
       chosenModel,
