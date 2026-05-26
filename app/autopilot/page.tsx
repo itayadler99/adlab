@@ -54,22 +54,40 @@ export default function AutopilotPage() {
 
   function startPollingVideo(jobId: string) {
     if (pollRef.current) window.clearInterval(pollRef.current);
+    let failedAttempts = 0;
     pollRef.current = window.setInterval(async () => {
       try {
         const res = await fetch(`/api/poll?id=${encodeURIComponent(jobId)}`);
+        if (!res.ok) {
+          failedAttempts += 1;
+          if (failedAttempts >= 5) {
+            setError(`שגיאה בבדיקת סטטוס הוידאו (HTTP ${res.status})`);
+            setStage("error");
+            if (pollRef.current) window.clearInterval(pollRef.current);
+            pollRef.current = null;
+          }
+          return;
+        }
+        failedAttempts = 0;
         const data = (await res.json()) as { status?: string; videoUrl?: string; error?: string };
         if (data.videoUrl && data.status === "succeeded") {
           setVideoUrl(data.videoUrl);
           if (pollRef.current) window.clearInterval(pollRef.current);
           pollRef.current = null;
         } else if (data.status === "failed") {
-          setError(data.error || "Video rendering failed");
+          setError(data.error || "ייצור הוידאו נכשל");
           setStage("error");
           if (pollRef.current) window.clearInterval(pollRef.current);
           pollRef.current = null;
         }
-      } catch {
-        // keep trying
+      } catch (e) {
+        failedAttempts += 1;
+        if (failedAttempts >= 5) {
+          setError(e instanceof Error ? e.message : "שגיאת רשת בבדיקת הוידאו");
+          setStage("error");
+          if (pollRef.current) window.clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
       }
     }, 5000);
   }

@@ -15,7 +15,12 @@ export async function metaGet<T = any>(path: string, params: Record<string, stri
   url.searchParams.set("access_token", token());
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
   const res = await fetch(url.toString());
-  return res.json();
+  const json = await res.json();
+  if (!res.ok || (json && json.error)) {
+    const msg = json?.error?.message || `Meta GET ${path} failed ${res.status}`;
+    throw new Error(`Meta API: ${msg}`);
+  }
+  return json;
 }
 
 export async function metaPost<T = any>(path: string, body: Record<string, any> = {}): Promise<T> {
@@ -26,7 +31,12 @@ export async function metaPost<T = any>(path: string, body: Record<string, any> 
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  return res.json();
+  const json = await res.json();
+  if (!res.ok || (json && json.error)) {
+    const msg = json?.error?.message || `Meta POST ${path} failed ${res.status}`;
+    throw new Error(`Meta API: ${msg}`);
+  }
+  return json;
 }
 
 export async function getCampaigns(statusFilter: "ACTIVE" | "PAUSED" | "ALL" = "ALL") {
@@ -116,24 +126,28 @@ export async function createVideoCreative(opts: {
   name: string;
   page_id: string;
   video_id: string;
-  thumbnail_url: string;
+  thumbnail_url?: string;
   message: string;
   link: string;
   cta_type?: string;
 }) {
+  const video_data: Record<string, unknown> = {
+    video_id: opts.video_id,
+    message: opts.message,
+    call_to_action: {
+      type: opts.cta_type || "SHOP_NOW",
+      value: { link: opts.link },
+    },
+  };
+  // Only include image_url if a real URL was provided — empty string breaks Meta API.
+  if (opts.thumbnail_url && opts.thumbnail_url.startsWith("http")) {
+    video_data.image_url = opts.thumbnail_url;
+  }
   return metaPost(`/${adAccount()}/adcreatives`, {
     name: opts.name,
     object_story_spec: {
       page_id: opts.page_id,
-      video_data: {
-        video_id: opts.video_id,
-        image_url: opts.thumbnail_url,
-        message: opts.message,
-        call_to_action: {
-          type: opts.cta_type || "SHOP_NOW",
-          value: { link: opts.link },
-        },
-      },
+      video_data,
     },
   });
 }

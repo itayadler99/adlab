@@ -40,9 +40,8 @@ interface ApifyRunResponse {
   data: { id: string; status: string; defaultDatasetId: string };
 }
 
-interface ApifyDatasetResponse {
-  data: { items: ApifyAd[] };
-}
+// Apify /datasets/{id}/items returns a raw JSON array, not wrapped.
+type ApifyDatasetResponse = ApifyAd[];
 
 async function apifyFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const url = `${BASE_URL}${path}${path.includes("?") ? "&" : "?"}token=${APIFY_TOKEN}`;
@@ -74,8 +73,8 @@ export async function pollScrape(runId: string): Promise<{ status: string; ads: 
   if (status !== "SUCCEEDED") {
     return { status, ads: [] };
   }
-  const dataset = await apifyFetch<ApifyDatasetResponse>(`/datasets/${defaultDatasetId}/items?format=json&clean=true`);
-  return { status, ads: dataset.data.items ?? [] };
+  const items = await apifyFetch<ApifyDatasetResponse>(`/datasets/${defaultDatasetId}/items?format=json&clean=true`);
+  return { status, ads: Array.isArray(items) ? items : [] };
 }
 
 export async function scrapeAdLibrary(input: ApifyRunInput, timeoutMs = 120_000): Promise<ApifyAd[]> {

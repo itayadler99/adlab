@@ -102,12 +102,22 @@ export function scoreAds(ads: ApifyAd[]): ScoredAd[] {
   return scored;
 }
 
+type ImageMediaType = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+const ALLOWED_MEDIA: ImageMediaType[] = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+
 async function analyzeImage(imageUrl: string, prompt: string): Promise<string> {
   try {
     const imgRes = await fetch(imageUrl);
     if (!imgRes.ok) return "";
     const buf = Buffer.from(await imgRes.arrayBuffer());
-    const ct = imgRes.headers.get("content-type") || "image/jpeg";
+    const rawCt = (imgRes.headers.get("content-type") || "image/jpeg").split(";")[0].trim().toLowerCase();
+    // Reject non-image content (CDN error pages, html, etc.)
+    const media_type: ImageMediaType = ALLOWED_MEDIA.includes(rawCt as ImageMediaType)
+      ? (rawCt as ImageMediaType)
+      : "image/jpeg";
+    if (!ALLOWED_MEDIA.includes(rawCt as ImageMediaType) && !rawCt.startsWith("image/")) {
+      return "";
+    }
     const b64 = buf.toString("base64");
     const res = await anthropic().messages.create({
       model: "claude-opus-4-6",
@@ -116,17 +126,14 @@ async function analyzeImage(imageUrl: string, prompt: string): Promise<string> {
         {
           role: "user",
           content: [
-            {
-              type: "image",
-              source: { type: "base64", media_type: ct as "image/jpeg" | "image/png" | "image/gif" | "image/webp", data: b64 },
-            },
+            { type: "image", source: { type: "base64", media_type, data: b64 } },
             { type: "text", text: prompt },
           ],
         },
       ],
     });
-    const text = res.content.find((b) => b.type === "text");
-    return text && text.type === "text" ? text.text : "";
+    const textBlock = res.content.find((b) => b.type === "text");
+    return textBlock && textBlock.type === "text" ? textBlock.text : "";
   } catch {
     return "";
   }
@@ -174,7 +181,8 @@ Visual: ${visualDescription || "(unknown)"}`;
     system: sys,
     messages: [{ role: "user", content: user }],
   });
-  const text = (res.content[0] as { type: "text"; text: string }).text;
+  const textBlock = res.content.find((b) => b.type === "text");
+  const text = textBlock && textBlock.type === "text" ? textBlock.text : "";
   const m = text.match(/\{[\s\S]*\}/);
   if (!m) {
     return {
