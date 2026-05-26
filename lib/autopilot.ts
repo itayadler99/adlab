@@ -37,6 +37,8 @@ export interface AutopilotResult {
     hook: string;
     style: AdStyle;
     language: "en" | "he";
+    demographic?: string;
+    voiceArchetype?: string;
   };
   imageJobIds: string[]; // sales static images (Ideogram v2)
   thumbnailUrl?: string;
@@ -190,6 +192,10 @@ export interface WinnerAnalysis {
   hook: string;
   style: AdStyle;
   body_themes: string[];
+  /** Free-text character description (e.g. "Black male rapper, late 20s, gold chain"). */
+  character?: string;
+  /** Voice archetype hint (e.g. "rapper_male", "young_woman_excited"). */
+  voiceArchetype?: string;
   thumbnailUrl?: string;
 }
 
@@ -207,13 +213,20 @@ export async function analyzeWinner(ad: ApifyAd): Promise<WinnerAnalysis> {
   }
 
   const sys = `You analyze winning Meta ads. Output strict JSON only:
-{"summary": "1-2 sentences what this ad is selling and why it works", "hook": "the opening line/visual hook in <=12 words", "style": "ugc_review" | "yapping" | "founder_pov" | "demo", "body_themes": ["3-6 short keyword themes from the body copy"]}
+{"summary": "1-2 sentences what this ad is selling and why it works",
+ "hook": "the opening line/visual hook in <=12 words",
+ "style": "ugc_review" | "yapping" | "founder_pov" | "demo",
+ "body_themes": ["3-6 short keyword themes from the body copy"],
+ "character": "free-text description of the on-camera person — gender, ethnicity, age range, vibe, distinctive items (chain, cap, makeup, outfit). Empty string if no person on camera.",
+ "voiceArchetype": "one of: rapper_male | rapper_female | young_woman_excited | young_woman_chill | young_man_hype | young_man_casual | founder_male | founder_female | mom_warm | british_male | british_female | narrator_neutral"}
 
 Style definitions:
 - ugc_review: real person holding/reviewing product, selfie cam
 - yapping: fast talking head selfie, hook mid-sentence, raw vibe
 - founder_pov: brand owner explaining, polished but personal
-- demo: product close-up, motion, no face`;
+- demo: product close-up, motion, no face
+
+voiceArchetype guide: pick the voice that would sound like the on-camera character. If the character is a Black rapper with a chain → rapper_male. Yapping 22-year-old girl in a car → young_woman_excited. Calm mother → mom_warm. No face / pure demo → narrator_neutral.`;
 
   const user = `Ad title: ${title}
 Ad body: ${body}
@@ -242,6 +255,8 @@ Visual: ${visualDescription || "(unknown)"}`;
     hook: string;
     style: AdStyle;
     body_themes: string[];
+    character?: string;
+    voiceArchetype?: string;
   };
   return { ...parsed, thumbnailUrl };
 }
@@ -419,6 +434,8 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
           hook: analysis.hook,
           style: analysis.style,
           language: input.language ?? "en",
+          demographic: analysis.character || undefined,
+          voiceArchetype: analysis.voiceArchetype || undefined,
         }
       : undefined;
 

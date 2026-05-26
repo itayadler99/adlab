@@ -1,6 +1,20 @@
 // Prompt builders for the UGC pipeline.
 // Inputs come from autopilot's competitor analysis + chosen product.
 
+export type VoiceArchetype =
+  | "rapper_male"           // Hip-hop, street, deep confident
+  | "rapper_female"         // Female rap / R&B, smooth
+  | "young_woman_excited"   // Yapping selfie 20s
+  | "young_woman_chill"     // Soft relatable mom-friend
+  | "young_man_hype"        // Hype bro, energetic
+  | "young_man_casual"      // Friendly Gen-Z guy
+  | "founder_male"          // Confident polished male 30s
+  | "founder_female"        // Confident polished female 30s
+  | "mom_warm"              // Warm relatable mother
+  | "british_male"          // Articulate British male
+  | "british_female"        // Articulate British female
+  | "narrator_neutral";     // Default fallback
+
 export interface UgcPromptCtx {
   productTitle: string;
   productDescription?: string;
@@ -9,11 +23,12 @@ export interface UgcPromptCtx {
   demographic?: string; // e.g. "young woman 25-30 USA"
   setting?: string; // e.g. "sunny apartment bedroom morning"
   language?: "en" | "he";
+  voiceArchetype?: VoiceArchetype;
 }
 
 /** Realistic actor headshot/half-body matching the competitor's demographic + setting. */
 export function buildActorPrompt(ctx: UgcPromptCtx): string {
-  const demo = ctx.demographic || defaultDemoForStyle(ctx.style);
+  const demo = ctx.demographic || defaultDemoForArchetype(ctx.voiceArchetype) || defaultDemoForStyle(ctx.style);
   const setting = ctx.setting || defaultSettingForStyle(ctx.style);
   return [
     `Hyperrealistic vertical 9:16 selfie-style photograph.`,
@@ -52,6 +67,23 @@ export function buildAnimationPrompt(ctx: UgcPromptCtx, script: string): string 
   ].join(" ");
 }
 
+function defaultDemoForArchetype(arch?: VoiceArchetype): string | null {
+  switch (arch) {
+    case "rapper_male":         return "a confident Black man in his late 20s, fitted cap or durag, chain visible, tattoos on arms, street style, hip-hop attitude";
+    case "rapper_female":       return "a confident Black woman in her mid 20s, long lashes, hoop earrings, fitted top, R&B vibe";
+    case "young_woman_excited": return "a relatable American woman age 22-26, natural makeup, expressive eyes, friendly Gen-Z look";
+    case "young_woman_chill":   return "a soft-spoken woman in her late 20s, casual hair, warm friendly face, mom-friend energy";
+    case "young_man_hype":      return "an energetic 20-something guy, athletic build, big grin, frat-bro energy";
+    case "young_man_casual":    return "a relaxed 22-year-old guy, hoodie, slight grin, low-key Gen-Z";
+    case "founder_male":        return "a polished founder-type man in his early 30s, clean t-shirt, focused intelligent gaze";
+    case "founder_female":      return "a polished founder-type woman in her early 30s, clean blouse, focused intelligent gaze";
+    case "mom_warm":            return "a warm relatable woman in her mid 30s, natural look, kind eyes, approachable mother vibe";
+    case "british_male":        return "an articulate British man in his late 20s, clean style, expressive face";
+    case "british_female":      return "an articulate British woman in her late 20s, clean style, expressive face";
+    default:                    return null;
+  }
+}
+
 function defaultDemoForStyle(style: UgcPromptCtx["style"]): string {
   switch (style) {
     case "ugc_review": return "a relatable woman in her late 20s, natural makeup, friendly approachable face";
@@ -72,10 +104,53 @@ function defaultSettingForStyle(style: UgcPromptCtx["style"]): string {
   }
 }
 
-/** ElevenLabs voice ids per language. Override via env vars. */
-export function pickVoiceId(language: "en" | "he" = "en"): string {
+/**
+ * ElevenLabs voice IDs by archetype. Public voice library — these are well-known IDs.
+ * Override any of them via env vars (ELEVENLABS_VOICE_<ARCHETYPE>).
+ */
+const VOICE_LIBRARY: Record<VoiceArchetype, string> = {
+  rapper_male:         "nPczCjzI2devNBz1zQrb", // Brian — deep American male
+  rapper_female:       "cgSgspJ2msm6clMCkdW9", // Jessica — expressive American female (closest pre-made; can be customized)
+  young_woman_excited: "cgSgspJ2msm6clMCkdW9", // Jessica
+  young_woman_chill:   "EXAVITQu4vr4xnSDxMaL", // Sarah — soft young American female
+  young_man_hype:      "bIHbv24MWmeRgasZH58o", // Will — confident young American male
+  young_man_casual:    "TX3LPaxmHKxFdv7VOQHJ", // Liam — articulate young male
+  founder_male:        "cjVigY5qzO86Huf0OWal", // Eric — mature American male, narrator
+  founder_female:      "9BWtsMINqrJLrRacOk9x", // Aria — expressive American female
+  mom_warm:            "XrExE9yKIg1WjnnlVkGX", // Matilda — friendly American female
+  british_male:        "JBFqnCBsd6RMkjVDRZzb", // George — warm British male
+  british_female:      "Xb7hH8MSUJpSbSDYk0k2", // Alice — confident British female
+  narrator_neutral:    "21m00Tcm4TlvDq8ikWAM", // Rachel — multilingual default
+};
+
+/** Pick an ElevenLabs voice ID matching the archetype + language. */
+export function pickVoiceId(archetype?: VoiceArchetype, language: "en" | "he" = "en"): string {
+  // Hebrew: prefer explicit env override, else Rachel (multilingual handles Hebrew).
   if (language === "he") {
-    return process.env.ELEVENLABS_VOICE_HE || "21m00Tcm4TlvDq8ikWAM"; // Rachel multilingual fallback
+    return process.env.ELEVENLABS_VOICE_HE || VOICE_LIBRARY.narrator_neutral;
   }
-  return process.env.ELEVENLABS_VOICE_EN || "21m00Tcm4TlvDq8ikWAM"; // Rachel
+  const arch = archetype || "narrator_neutral";
+  // Env override per archetype: ELEVENLABS_VOICE_RAPPER_MALE etc.
+  const envKey = `ELEVENLABS_VOICE_${arch.toUpperCase()}`;
+  return process.env[envKey] || VOICE_LIBRARY[arch] || VOICE_LIBRARY.narrator_neutral;
+}
+
+/** Heuristic: map a free-text archetype label from the LLM to our enum. */
+export function normalizeArchetype(raw: string | undefined): VoiceArchetype {
+  if (!raw) return "narrator_neutral";
+  const s = raw.toLowerCase();
+  if (/(rapper|hip[- ]?hop|trap|street).*(female|woman|girl)/.test(s)) return "rapper_female";
+  if (/(rapper|hip[- ]?hop|trap|street)/.test(s)) return "rapper_male";
+  if (/(mom|mother|warm.*woman|relatable mother)/.test(s)) return "mom_warm";
+  if (/british.*(woman|female|girl)/.test(s)) return "british_female";
+  if (/british.*(man|male|guy)/.test(s)) return "british_male";
+  if (/(founder|ceo|entrepreneur).*(female|woman)/.test(s)) return "founder_female";
+  if (/(founder|ceo|entrepreneur)/.test(s)) return "founder_male";
+  if (/(hype|energetic|frat|bro).*(man|male|guy)/.test(s) || /young man hype/.test(s)) return "young_man_hype";
+  if (/young.*(man|male|guy)|gen[- ]?z.*guy/.test(s)) return "young_man_casual";
+  if (/(excited|yap|fast.*talk|hyper).*(woman|female|girl)/.test(s) || /young woman excited/.test(s)) return "young_woman_excited";
+  if (/(chill|soft|calm).*(woman|female|girl)/.test(s) || /young woman chill/.test(s)) return "young_woman_chill";
+  if (/(woman|female|girl)/.test(s)) return "young_woman_chill";
+  if (/(man|male|guy)/.test(s)) return "young_man_casual";
+  return "narrator_neutral";
 }

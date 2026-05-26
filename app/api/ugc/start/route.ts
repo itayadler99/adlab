@@ -30,6 +30,7 @@ export async function POST(req: NextRequest) {
       demographic: body.demographic ? clean(body.demographic, 200) : undefined,
       setting: body.setting ? clean(body.setting, 200) : undefined,
       language: body.language || "en",
+      voiceArchetype: body.voiceArchetype ? clean(body.voiceArchetype, 50) : undefined,
     };
     const state = await startUgc(inputs);
     return NextResponse.json(state);

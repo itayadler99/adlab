@@ -7,7 +7,9 @@ import {
   buildCompositePrompt,
   buildAnimationPrompt,
   pickVoiceId,
+  normalizeArchetype,
   type UgcPromptCtx,
+  type VoiceArchetype,
 } from "./ugc-prompts";
 
 // FAL endpoints used by each stage
@@ -38,6 +40,8 @@ export interface UgcInputs {
   demographic?: string;
   setting?: string;
   language?: "en" | "he";
+  /** Raw archetype string from the LLM — normalized via normalizeArchetype(). */
+  voiceArchetype?: string;
 }
 
 export interface UgcArtifacts {
@@ -143,6 +147,7 @@ export async function advanceUgc(state: UgcState): Promise<UgcState> {
 
 /** Submit the FAL job for the current stage and stash request_id in state.pending. */
 async function submitStage(state: UgcState): Promise<void> {
+  const archetype: VoiceArchetype = normalizeArchetype(state.inputs.voiceArchetype);
   const ctx: UgcPromptCtx = {
     productTitle: state.inputs.productTitle,
     productDescription: state.inputs.productDescription,
@@ -151,6 +156,7 @@ async function submitStage(state: UgcState): Promise<void> {
     demographic: state.inputs.demographic,
     setting: state.inputs.setting,
     language: state.inputs.language,
+    voiceArchetype: archetype,
   };
 
   let endpoint: string;
@@ -196,7 +202,7 @@ async function submitStage(state: UgcState): Promise<void> {
       endpoint = FAL.tts;
       input = {
         text: state.inputs.script,
-        voice: pickVoiceId(state.inputs.language || "en"),
+        voice: pickVoiceId(archetype, state.inputs.language || "en"),
         stability: 0.5,
         similarity_boost: 0.75,
         style: 0.4,

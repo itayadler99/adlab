@@ -13,7 +13,10 @@ interface UgcInputsClient {
   script: string;
   hook: string;
   style: AdStyle;
+  demographic?: string;
+  setting?: string;
   language: "en" | "he";
+  voiceArchetype?: string;
 }
 
 interface AutopilotResult {
