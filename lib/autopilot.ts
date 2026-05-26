@@ -387,25 +387,38 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
       }
       chosenDuration = chosenDuration ?? 15;
     }
-    // Auto-pick model by duration to maximize "single-clip" feel.
-    // If we have a real product image, ALWAYS route to image-to-video so the
-    // model anchors on the actual product instead of hallucinating jewelry.
-    // <=8s → Veo 3.1 Fast i2v (8s native, 1080p).
-    // 9-15s → Kling 3 Pro i2v (10s native, no stitching).
-    // >15s → Kling 3 Pro i2v sequenced.
+    // Model picking strategy V2:
+    // - With product image: image-to-video MANDATORY (text-to-video invents jewelry).
+    // - Default to Seedance 1 Pro on Replicate: 1080p, 10s native (no stitching),
+    //   first-frame anchoring, no FAL gating to deal with. User has Replicate credit.
+    // - Veo 3.1 Fast i2v on FAL is the upgrade path if it accepts the request
+    //   (currently the only frontier FAL model not gated for this account).
     const hasProductImg = Boolean(product.imageUrl);
     if (input.videoModel) {
       chosenModel = input.videoModel;
-      // Promote text-only models to i2v variants when we have a product image.
+      // Promote text-only models to their i2v variants when we have a product image.
       if (hasProductImg) {
         if (chosenModel === "veo-3.1-fast") chosenModel = "veo-3.1-fast-i2v";
         else if (chosenModel === "veo-3.1") chosenModel = "veo-3.1-i2v";
         else if (chosenModel === "kling-3.0") chosenModel = "kling-3.0-i2v";
+        else if (chosenModel === "seedance-2.0") chosenModel = "seedance-1.0";
       }
     } else if (hasProductImg) {
-      chosenModel = chosenDuration <= 8 ? "veo-3.1-fast-i2v" : "kling-3.0-i2v";
+      // Auto pick by duration. Seedance 1 Pro is the best accessible i2v for this
+      // account: 1080p, 10s native single clip for ≤10s ads.
+      if (chosenDuration <= 8) {
+        // Veo 3.1 Fast i2v is sharper but capped at 8s — prefer it for short ads.
+        chosenModel = "veo-3.1-fast-i2v";
+      } else if (chosenDuration <= 10) {
+        chosenModel = "seedance-1.0"; // Replicate, image input supported, 10s
+      } else {
+        // Longer than any single-clip native: use Seedance and stitch.
+        chosenModel = "seedance-1.0";
+      }
     } else if (chosenDuration <= 8) {
       chosenModel = "veo-3.1-fast";
+    } else if (chosenDuration <= 10) {
+      chosenModel = "sora-2-pro"; // Replicate text-to-video, top realism for non-product hero shots
     } else {
       chosenModel = "kling-3.0";
     }
