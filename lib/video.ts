@@ -3,18 +3,21 @@ import * as falLib from "./fal";
 
 // Frontier video models. FAL-hosted models marked (FAL); rest run on Replicate.
 export type VideoModel =
-  | "sora-2-pro"     // (Replicate) OpenAI Sora 2 Pro — top realism
-  | "veo-3.1"        // (FAL) Google Veo 3.1 — frontier, 8s
-  | "veo-3.1-fast"   // (FAL) Veo 3.1 Fast — cheaper, 8s
-  | "kling-3.0"      // (FAL) Kling 3 Pro — frontier UGC, up to 15s
-  | "seedance-2.0"   // (FAL) Bytedance Seedance 2.0 — strong motion
-  | "veo-3"          // (Replicate) legacy Veo 3, 8s
-  | "veo-3-fast"     // (Replicate) legacy Veo 3 Fast, 8s
-  | "kling-2.1"      // (Replicate) Kling 2.1
-  | "kling-1.6"      // (Replicate) Kling 1.6 standard
-  | "hailuo-02"      // (Replicate) MiniMax Hailuo 02
-  | "seedance-1.0"   // (Replicate) Seedance 1
-  | "minimax";       // (Replicate) legacy minimax/video-01
+  | "sora-2-pro"        // (Replicate) OpenAI Sora 2 Pro — top realism
+  | "veo-3.1"           // (FAL) Google Veo 3.1 — frontier, 8s
+  | "veo-3.1-fast"      // (FAL) Veo 3.1 Fast — cheaper, 8s
+  | "kling-3.0"         // (FAL) Kling 3 Pro — frontier UGC, up to 15s
+  | "seedance-2.0"      // (FAL) Bytedance Seedance 2.0 — strong motion
+  | "veo-3.1-i2v"       // (FAL) Veo 3.1 image-to-video
+  | "veo-3.1-fast-i2v"  // (FAL) Veo 3.1 Fast image-to-video — UGC default
+  | "kling-3.0-i2v"     // (FAL) Kling 3 Pro image-to-video
+  | "veo-3"             // (Replicate) legacy Veo 3, 8s
+  | "veo-3-fast"        // (Replicate) legacy Veo 3 Fast, 8s
+  | "kling-2.1"         // (Replicate) Kling 2.1
+  | "kling-1.6"         // (Replicate) Kling 1.6 standard
+  | "hailuo-02"         // (Replicate) MiniMax Hailuo 02
+  | "seedance-1.0"      // (Replicate) Seedance 1
+  | "minimax";          // (Replicate) legacy minimax/video-01
 
 export type VideoProvider = "fal" | "replicate";
 
@@ -25,18 +28,21 @@ interface ModelSpec {
 }
 
 const REGISTRY: Record<VideoModel, ModelSpec> = {
-  "sora-2-pro":   { provider: "replicate", endpoint: "openai/sora-2-pro",                            maxSeconds: 10 },
-  "veo-3.1":      { provider: "fal",       endpoint: "fal-ai/veo3.1",                                maxSeconds: 8  },
-  "veo-3.1-fast": { provider: "fal",       endpoint: "fal-ai/veo3.1/fast",                           maxSeconds: 8  },
-  "kling-3.0":    { provider: "fal",       endpoint: "fal-ai/kling-video/v3/pro/text-to-video",      maxSeconds: 15 },
-  "seedance-2.0": { provider: "fal",       endpoint: "fal-ai/bytedance/seedance-2.0/text-to-video",  maxSeconds: 10 },
-  "veo-3":        { provider: "replicate", endpoint: "google/veo-3",                                 maxSeconds: 8  },
-  "veo-3-fast":   { provider: "replicate", endpoint: "google/veo-3-fast",                            maxSeconds: 8  },
-  "kling-2.1":    { provider: "replicate", endpoint: "kwaivgi/kling-v2.1-master",                    maxSeconds: 10 },
-  "kling-1.6":    { provider: "replicate", endpoint: "kwaivgi/kling-v1.6-standard",                  maxSeconds: 10 },
-  "hailuo-02":    { provider: "replicate", endpoint: "minimax/hailuo-02",                            maxSeconds: 10 },
-  "seedance-1.0": { provider: "replicate", endpoint: "bytedance/seedance-1-pro",                     maxSeconds: 10 },
-  "minimax":      { provider: "replicate", endpoint: "minimax/video-01",                             maxSeconds: 6  },
+  "sora-2-pro":        { provider: "replicate", endpoint: "openai/sora-2-pro",                            maxSeconds: 10 },
+  "veo-3.1":           { provider: "fal",       endpoint: "fal-ai/veo3.1",                                maxSeconds: 8  },
+  "veo-3.1-fast":      { provider: "fal",       endpoint: "fal-ai/veo3.1/fast",                           maxSeconds: 8  },
+  "kling-3.0":         { provider: "fal",       endpoint: "fal-ai/kling-video/v3/pro/text-to-video",      maxSeconds: 15 },
+  "seedance-2.0":      { provider: "fal",       endpoint: "fal-ai/bytedance/seedance-2.0/text-to-video",  maxSeconds: 10 },
+  "veo-3.1-i2v":       { provider: "fal",       endpoint: "fal-ai/veo3.1/image-to-video",                 maxSeconds: 8  },
+  "veo-3.1-fast-i2v":  { provider: "fal",       endpoint: "fal-ai/veo3.1/fast/image-to-video",            maxSeconds: 8  },
+  "kling-3.0-i2v":     { provider: "fal",       endpoint: "fal-ai/kling-video/v3/pro/image-to-video",     maxSeconds: 10 },
+  "veo-3":             { provider: "replicate", endpoint: "google/veo-3",                                 maxSeconds: 8  },
+  "veo-3-fast":        { provider: "replicate", endpoint: "google/veo-3-fast",                            maxSeconds: 8  },
+  "kling-2.1":         { provider: "replicate", endpoint: "kwaivgi/kling-v2.1-master",                    maxSeconds: 10 },
+  "kling-1.6":         { provider: "replicate", endpoint: "kwaivgi/kling-v1.6-standard",                  maxSeconds: 10 },
+  "hailuo-02":         { provider: "replicate", endpoint: "minimax/hailuo-02",                            maxSeconds: 10 },
+  "seedance-1.0":      { provider: "replicate", endpoint: "bytedance/seedance-1-pro",                     maxSeconds: 10 },
+  "minimax":           { provider: "replicate", endpoint: "minimax/video-01",                             maxSeconds: 6  },
 };
 
 export function getProvider(model: VideoModel): VideoProvider {
@@ -57,6 +63,7 @@ interface StartOpts {
   duration?: number; // seconds, model-dependent
   aspectRatio?: "16:9" | "9:16" | "1:1";
   resolution?: "720p" | "1080p";
+  imageUrl?: string; // for image-to-video models
 }
 
 export async function startVideo(
@@ -70,7 +77,7 @@ export async function startVideo(
   const spec = REGISTRY[model];
 
   if (spec.provider === "fal") {
-    const input = buildFalInput(model, prompt, { duration, aspectRatio, resolution });
+    const input = buildFalInput(model, prompt, { duration, aspectRatio, resolution, imageUrl: opts.imageUrl });
     const { request_id } = await falLib.submit(spec.endpoint, input);
     return { id: request_id, model, status: "pending" };
   }
@@ -115,9 +122,9 @@ export async function startVideo(
 function buildFalInput(
   model: VideoModel,
   prompt: string,
-  opts: { duration: number; aspectRatio: string; resolution: string }
+  opts: { duration: number; aspectRatio: string; resolution: string; imageUrl?: string }
 ): Record<string, unknown> {
-  const { duration, aspectRatio, resolution } = opts;
+  const { duration, aspectRatio, resolution, imageUrl } = opts;
   switch (model) {
     case "veo-3.1":
     case "veo-3.1-fast":
@@ -128,12 +135,32 @@ function buildFalInput(
         duration: `${Math.min(8, Math.max(5, duration))}s`,
         generate_audio: true,
       };
+    case "veo-3.1-i2v":
+    case "veo-3.1-fast-i2v":
+      if (!imageUrl) throw new Error(`${model} requires imageUrl`);
+      return {
+        prompt,
+        image_url: imageUrl,
+        aspect_ratio: aspectRatio,
+        resolution: resolution === "1080p" ? "1080p" : "720p",
+        duration: `${Math.min(8, Math.max(5, duration))}s`,
+        generate_audio: false, // we add TTS separately for lipsync control
+      };
     case "kling-3.0":
       return {
         prompt,
         duration: Math.min(15, Math.max(3, duration)),
         aspect_ratio: aspectRatio,
         audio: true,
+      };
+    case "kling-3.0-i2v":
+      if (!imageUrl) throw new Error(`${model} requires imageUrl`);
+      return {
+        prompt,
+        image_url: imageUrl,
+        duration: Math.min(10, Math.max(3, duration)),
+        aspect_ratio: aspectRatio,
+        audio: false,
       };
     case "seedance-2.0":
       return {

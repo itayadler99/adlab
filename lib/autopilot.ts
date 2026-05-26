@@ -6,24 +6,38 @@ import { startVideoSequence, type VideoModel } from "./video";
 import { getProducts, productUrl, type ShopProduct } from "./shopify";
 import { startSalesImages } from "./images";
 
+export type AutopilotMode = "video" | "ugc";
+
 export interface AutopilotResult {
   competitorPageName?: string;
   winningAdId?: string;
   winningAdSummary: string;
   winningAdHook: string;
-  winningAdStyle: string;
+  winningAdStyle: AdStyle;
   winningAdThemes: string[];
-  product: { id?: string; title: string; description: string; link: string };
+  product: { id?: string; title: string; description: string; link: string; imageUrl?: string };
   script: string;
   visualPrompt: string;
   cta: string;
   headlines: string[];
   bodyCopy: string;
-  videoJobId: string; // first clip — kept for backward compat
-  videoJobIds: string[]; // full sequence (1..N clips)
-  videoClipSeconds: number;
-  videoTotalSeconds: number;
-  videoModel: VideoModel;
+  mode: AutopilotMode;
+  // Video pipeline (mode = "video")
+  videoJobId?: string; // first clip — kept for backward compat
+  videoJobIds?: string[]; // full sequence (1..N clips)
+  videoClipSeconds?: number;
+  videoTotalSeconds?: number;
+  videoModel?: VideoModel;
+  // UGC pipeline (mode = "ugc")
+  ugcInputs?: {
+    productTitle: string;
+    productDescription?: string;
+    productImageUrl: string;
+    script: string;
+    hook: string;
+    style: AdStyle;
+    language: "en" | "he";
+  };
   imageJobIds: string[]; // sales static images (Ideogram v2)
   thumbnailUrl?: string;
   dailyBudget: number;
@@ -232,7 +246,7 @@ Visual: ${visualDescription || "(unknown)"}`;
   return { ...parsed, thumbnailUrl };
 }
 
-export async function pickProduct(themes: string[]): Promise<{ id?: string; title: string; description: string; link: string }> {
+export async function pickProduct(themes: string[]): Promise<{ id?: string; title: string; description: string; link: string; imageUrl?: string }> {
   const fallback = {
     title: "Montier Jewelry",
     description: "Lab-grown moissanite jewelry with lifetime warranty.",
@@ -261,6 +275,7 @@ export async function pickProduct(themes: string[]): Promise<{ id?: string; titl
       title: bestProduct.title,
       description: bestProduct.title,
       link: productUrl(bestProduct.handle),
+      imageUrl: bestProduct.image?.src,
     };
   } catch {
     return fallback;
@@ -272,6 +287,9 @@ export interface RunAutopilotInput {
   dailyBudget?: number;
   videoModel?: VideoModel;
   videoDuration?: number;
+  /** "auto" picks UGC for ugc_review/yapping styles, otherwise plain video. */
+  mode?: "auto" | "video" | "ugc";
+  language?: "en" | "he";
 }
 
 export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotResult> {
@@ -317,15 +335,39 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
     duration: 15,
   });
 
-  // Default to Veo 3.1 Fast (FAL) — frontier quality, native audio, 9:16 vertical.
-  const chosenModel: VideoModel = input.videoModel ?? "veo-3.1-fast";
-  const chosenDuration = input.videoDuration ?? 8;
-  const sequence = await startVideoSequence(
-    scriptOut.visual_prompt,
-    chosenModel,
-    chosenDuration,
-    { aspectRatio: "9:16", resolution: "1080p" }
-  );
+  // Decide mode: explicit override, else "auto" → UGC for ugc_review / yapping (when we have a product image).
+  const requestedMode = input.mode ?? "auto";
+  const mode: AutopilotMode =
+    requestedMode === "ugc"
+      ? "ugc"
+      : requestedMode === "video"
+        ? "video"
+        : (analysis.style === "ugc_review" || analysis.style === "yapping") && product.imageUrl
+          ? "ugc"
+          : "video";
+
+  // Video pipeline (skipped in UGC mode)
+  let videoJobId: string | undefined;
+  let videoJobIds: string[] | undefined;
+  let videoClipSeconds: number | undefined;
+  let videoTotalSeconds: number | undefined;
+  let chosenModel: VideoModel | undefined;
+  if (mode === "video") {
+    // Default to Veo 3.1 Fast (FAL) — frontier quality, native audio, 9:16 vertical.
+    chosenModel = input.videoModel ?? "veo-3.1-fast";
+    const chosenDuration = input.videoDuration ?? 8;
+    const sequence = await startVideoSequence(
+      scriptOut.visual_prompt,
+      chosenModel,
+      chosenDuration,
+      { aspectRatio: "9:16", resolution: "1080p" }
+    );
+    videoJobId = sequence.jobs[0].id;
+    videoJobIds = sequence.jobs.map((j) => j.id);
+    videoClipSeconds = sequence.clipSeconds;
+    videoTotalSeconds = sequence.totalSeconds;
+    chosenModel = sequence.model;
+  }
 
   const headlinesOut = await writeHeadlines({
     productTitle: product.title,
@@ -367,6 +409,19 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
   // Body copy: simple template referencing winning hook
   const bodyCopy = `${analysis.hook}\n\n${product.title} — ${product.description}\n\nShop now: ${product.link}`;
 
+  const ugcInputs =
+    mode === "ugc" && product.imageUrl
+      ? {
+          productTitle: product.title,
+          productDescription: product.description,
+          productImageUrl: product.imageUrl,
+          script: scriptOut.script,
+          hook: analysis.hook,
+          style: analysis.style,
+          language: input.language ?? "en",
+        }
+      : undefined;
+
   return {
     competitorPageName: winner.pageName || competitorName,
     winningAdId: winner.adArchiveId,
@@ -380,11 +435,13 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
     cta: scriptOut.cta,
     headlines: headlinesOut.headlines,
     bodyCopy,
-    videoJobId: sequence.jobs[0].id,
-    videoJobIds: sequence.jobs.map((j) => j.id),
-    videoClipSeconds: sequence.clipSeconds,
-    videoTotalSeconds: sequence.totalSeconds,
-    videoModel: sequence.model,
+    mode,
+    videoJobId,
+    videoJobIds,
+    videoClipSeconds,
+    videoTotalSeconds,
+    videoModel: chosenModel,
+    ugcInputs,
     imageJobIds,
     thumbnailUrl: analysis.thumbnailUrl,
     dailyBudget,
