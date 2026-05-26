@@ -99,7 +99,7 @@ export default function AutopilotPage() {
   const [competitorInput, setCompetitorInput] = useState("");
   const [dailyBudget, setDailyBudget] = useState(100);
   const [videoModel, setVideoModel] = useState<VideoModelChoice>("veo-3.1-fast");
-  const [videoDuration, setVideoDuration] = useState(8);
+  const [videoDuration, setVideoDuration] = useState(0); // 0 = auto-detect from competitor
   const [adMode, setAdMode] = useState<"auto" | "video" | "ugc">("auto");
   const [language, setLanguage] = useState<"en" | "he">("en");
   const [stage, setStage] = useState<Stage>("idle");
@@ -497,15 +497,17 @@ export default function AutopilotPage() {
                 onChange={(e) => setVideoDuration(Number(e.target.value))}
                 className="w-full bg-black border border-white/15 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
               >
-                <option value={8}>8 שניות (קליפ אחד)</option>
-                <option value={10}>10 שניות (קליפ אחד)</option>
-                <option value={25}>25 שניות (3 קליפים)</option>
-                <option value={30}>30 שניות (3-4 קליפים)</option>
-                <option value={45}>45 שניות (5-6 קליפים)</option>
-                <option value={60}>60 שניות (6-8 קליפים)</option>
+                <option value={0}>אוטומטי (לפי המתחרה) — מומלץ</option>
+                <option value={8}>8 שניות</option>
+                <option value={10}>10 שניות</option>
+                <option value={15}>15 שניות</option>
+                <option value={20}>20 שניות</option>
+                <option value={30}>30 שניות</option>
+                <option value={45}>45 שניות</option>
+                <option value={60}>60 שניות</option>
               </select>
               <p className="text-xs text-white/40">
-                מעל 10 שניות = כמה קליפים רצופים עם המשכיות ויזואלית. כל קליפ נוצר בנפרד באיכות מקסימלית.
+                סרטון רציף, ללא חתכים נראים. אוטומטי = מדדים את אורך הסרטון של המתחרה ומתאימים. עד 15 שניות מיוצר כקליפ אחד אחיד; מעל זה חיבור חלק עם המשכיות ויזואלית מלאה.
               </p>
             </div>
             <button

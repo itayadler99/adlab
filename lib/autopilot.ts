@@ -5,6 +5,7 @@ import { startVideoSequence, type VideoModel } from "./video";
 // VideoModel re-exported for callers
 import { getProducts, productUrl, type ShopProduct } from "./shopify";
 import { startSalesImages } from "./images";
+import { getVideoDurationSec } from "./video-meta";
 
 export type AutopilotMode = "video" | "ugc";
 
@@ -368,9 +369,28 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
   let videoTotalSeconds: number | undefined;
   let chosenModel: VideoModel | undefined;
   if (mode === "video") {
-    // Default to Veo 3.1 Fast (FAL) — frontier quality, native audio, 9:16 vertical.
-    chosenModel = input.videoModel ?? "veo-3.1-fast";
-    const chosenDuration = input.videoDuration ?? 8;
+    // Resolve duration: explicit user value > probed winner duration > 15s fallback.
+    let chosenDuration = input.videoDuration && input.videoDuration > 0 ? input.videoDuration : undefined;
+    if (!chosenDuration) {
+      const winnerVideoUrl =
+        winner.snapshot?.videos?.[0]?.videoHdUrl || winner.snapshot?.videos?.[0]?.videoSdUrl;
+      if (winnerVideoUrl) {
+        const detected = await getVideoDurationSec(winnerVideoUrl);
+        if (detected) chosenDuration = Math.round(Math.min(60, Math.max(5, detected)));
+      }
+      chosenDuration = chosenDuration ?? 15;
+    }
+    // Auto-pick model by duration to maximize "single-clip" feel.
+    // <=8s → Veo 3.1 Fast (8s native, 1080p, audio).
+    // 9-15s → Kling 3 Pro (15s native, no stitching needed).
+    // >15s → Kling 3 Pro sequenced (best continuity for stitching).
+    if (input.videoModel) {
+      chosenModel = input.videoModel;
+    } else if (chosenDuration <= 8) {
+      chosenModel = "veo-3.1-fast";
+    } else {
+      chosenModel = "kling-3.0";
+    }
     const sequence = await startVideoSequence(
       scriptOut.visual_prompt,
       chosenModel,
