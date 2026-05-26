@@ -86,6 +86,60 @@ export async function startVideo(
   };
 }
 
+/** Native max-seconds per clip on each model. Anything longer requires sequencing. */
+export function maxClipSeconds(model: VideoModel): number {
+  switch (model) {
+    case "veo-3":
+    case "veo-3-fast":
+      return 8;
+    case "kling-2.1":
+    case "kling-1.6":
+    case "hailuo-02":
+    case "seedance-1.0":
+      return 10;
+    case "minimax":
+    default:
+      return 6;
+  }
+}
+
+export interface VideoSequence {
+  jobs: VideoJob[];
+  clipSeconds: number;
+  totalSeconds: number;
+  model: VideoModel;
+}
+
+/**
+ * Generate one or more video clips that, played back-to-back, total `totalSeconds`.
+ * Each clip carries continuity hints in its prompt so the visual is coherent.
+ */
+export async function startVideoSequence(
+  basePrompt: string,
+  model: VideoModel,
+  totalSeconds: number,
+  opts: Omit<StartOpts, "duration"> = {}
+): Promise<VideoSequence> {
+  const max = maxClipSeconds(model);
+  const requested = Math.max(1, totalSeconds);
+  const clipSeconds = Math.min(max, requested);
+  const clips = Math.max(1, Math.ceil(requested / clipSeconds));
+  const jobs: VideoJob[] = [];
+  for (let i = 0; i < clips; i++) {
+    const part =
+      clips === 1
+        ? basePrompt
+        : `${basePrompt}\n\n(Scene ${i + 1} of ${clips}: ${
+            i === 0
+              ? "opening shot — establish subject, outfit, location, lighting."
+              : "direct continuation of previous scene — keep the same subject, same outfit, same location, same lighting, natural cut. Push the story forward."
+          })`;
+    const j = await startVideo(part, model, { ...opts, duration: clipSeconds });
+    jobs.push(j);
+  }
+  return { jobs, clipSeconds, totalSeconds: clipSeconds * clips, model };
+}
+
 export async function pollVideo(jobId: string, model: VideoModel = "veo-3-fast"): Promise<VideoJob> {
   const prediction = await replicate.predictions.get(jobId);
   const status = prediction.status as string;

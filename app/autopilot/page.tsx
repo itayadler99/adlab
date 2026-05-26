@@ -18,7 +18,11 @@ interface AutopilotResult {
   headlines: string[];
   bodyCopy: string;
   videoJobId: string;
+  videoJobIds?: string[];
+  videoClipSeconds?: number;
+  videoTotalSeconds?: number;
   videoModel: string;
+  imageJobIds?: string[];
   thumbnailUrl?: string;
   dailyBudget: number;
 }
@@ -51,57 +55,101 @@ export default function AutopilotPage() {
   const [stage, setStage] = useState<Stage>("idle");
   const [error, setError] = useState("");
   const [result, setResult] = useState<AutopilotResult | null>(null);
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [videoUrls, setVideoUrls] = useState<(string | null)[]>([]);
+  const [imageUrls, setImageUrls] = useState<(string | null)[]>([]);
   const [selectedHeadline, setSelectedHeadline] = useState(0);
   const [editedBody, setEditedBody] = useState("");
   const [editedBudget, setEditedBudget] = useState(100);
   const [launchInfo, setLaunchInfo] = useState<{ campaign_id?: string } | null>(null);
-  const pollRef = useRef<number | null>(null);
+  const pollersRef = useRef<number[]>([]);
+  const videoUrl = videoUrls[0] || null;
+
+  function clearAllPollers() {
+    for (const id of pollersRef.current) window.clearInterval(id);
+    pollersRef.current = [];
+  }
 
   useEffect(() => {
-    return () => {
-      if (pollRef.current) window.clearInterval(pollRef.current);
-    };
+    return () => clearAllPollers();
   }, []);
 
-  function startPollingVideo(jobId: string) {
-    if (pollRef.current) window.clearInterval(pollRef.current);
+  function pollJob(jobId: string, kind: "video" | "image", onDone: (url: string) => void, onFail: (msg: string) => void) {
     let failedAttempts = 0;
-    pollRef.current = window.setInterval(async () => {
+    const handle = window.setInterval(async () => {
       try {
-        const res = await fetch(`/api/poll?id=${encodeURIComponent(jobId)}`);
+        const res = await fetch(`/api/poll?id=${encodeURIComponent(jobId)}&kind=${kind}`);
         if (!res.ok) {
           failedAttempts += 1;
           if (failedAttempts >= 5) {
-            setError(`שגיאה בבדיקת סטטוס הוידאו (HTTP ${res.status})`);
-            setStage("error");
-            if (pollRef.current) window.clearInterval(pollRef.current);
-            pollRef.current = null;
+            onFail(`HTTP ${res.status}`);
+            window.clearInterval(handle);
           }
           return;
         }
         failedAttempts = 0;
-        const data = (await res.json()) as { status?: string; videoUrl?: string; error?: string };
-        if (data.videoUrl && data.status === "succeeded") {
-          setVideoUrl(data.videoUrl);
-          if (pollRef.current) window.clearInterval(pollRef.current);
-          pollRef.current = null;
+        const data = (await res.json()) as {
+          status?: string;
+          videoUrl?: string;
+          imageUrl?: string;
+          error?: string;
+        };
+        const url = kind === "video" ? data.videoUrl : data.imageUrl;
+        if (url && data.status === "succeeded") {
+          onDone(url);
+          window.clearInterval(handle);
         } else if (data.status === "failed") {
-          setError(data.error || "ייצור הוידאו נכשל");
-          setStage("error");
-          if (pollRef.current) window.clearInterval(pollRef.current);
-          pollRef.current = null;
+          onFail(data.error || "failed");
+          window.clearInterval(handle);
         }
       } catch (e) {
         failedAttempts += 1;
         if (failedAttempts >= 5) {
-          setError(e instanceof Error ? e.message : "שגיאת רשת בבדיקת הוידאו");
-          setStage("error");
-          if (pollRef.current) window.clearInterval(pollRef.current);
-          pollRef.current = null;
+          onFail(e instanceof Error ? e.message : "network");
+          window.clearInterval(handle);
         }
       }
     }, 5000);
+    pollersRef.current.push(handle);
+  }
+
+  function startPollingAll(videoIds: string[], imageIds: string[]) {
+    clearAllPollers();
+    setVideoUrls(new Array(videoIds.length).fill(null));
+    setImageUrls(new Array(imageIds.length).fill(null));
+    videoIds.forEach((jid, idx) => {
+      pollJob(
+        jid,
+        "video",
+        (url) =>
+          setVideoUrls((prev) => {
+            const next = [...prev];
+            next[idx] = url;
+            return next;
+          }),
+        (msg) => {
+          // Only first-clip failure is fatal; later clips can fail silently
+          if (idx === 0) {
+            setError(`ייצור הוידאו נכשל: ${msg}`);
+            setStage("error");
+          }
+        }
+      );
+    });
+    imageIds.forEach((jid, idx) => {
+      pollJob(
+        jid,
+        "image",
+        (url) =>
+          setImageUrls((prev) => {
+            const next = [...prev];
+            next[idx] = url;
+            return next;
+          }),
+        () => {
+          // image failure is non-fatal
+        }
+      );
+    });
   }
 
   async function runAutopilot() {
@@ -111,7 +159,8 @@ export default function AutopilotPage() {
     }
     setError("");
     setResult(null);
-    setVideoUrl(null);
+    setVideoUrls([]);
+    setImageUrls([]);
     setLaunchInfo(null);
     setStage("scanning");
 
@@ -132,7 +181,8 @@ export default function AutopilotPage() {
       setEditedBudget(data.dailyBudget);
       setSelectedHeadline(0);
       setStage("rendering");
-      startPollingVideo(data.videoJobId);
+      const vids = data.videoJobIds && data.videoJobIds.length > 0 ? data.videoJobIds : [data.videoJobId];
+      startPollingAll(vids, data.imageJobIds || []);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Network error");
       setStage("error");
@@ -174,8 +224,7 @@ export default function AutopilotPage() {
   }
 
   function reject() {
-    if (pollRef.current) window.clearInterval(pollRef.current);
-    pollRef.current = null;
+    clearAllPollers();
     runAutopilot();
   }
 
@@ -230,16 +279,22 @@ export default function AutopilotPage() {
               </p>
             </div>
             <div className="space-y-2">
-              <label className="block text-sm font-medium text-white/80">אורך וידאו (שניות)</label>
-              <input
-                type="number"
-                min={5}
-                max={10}
+              <label className="block text-sm font-medium text-white/80">אורך וידאו</label>
+              <select
                 value={videoDuration}
                 onChange={(e) => setVideoDuration(Number(e.target.value))}
                 className="w-full bg-black border border-white/15 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
-              />
-              <p className="text-xs text-white/40">5-10 שניות. Veo נועל ל-8.</p>
+              >
+                <option value={8}>8 שניות (קליפ אחד)</option>
+                <option value={10}>10 שניות (קליפ אחד)</option>
+                <option value={25}>25 שניות (3 קליפים)</option>
+                <option value={30}>30 שניות (3-4 קליפים)</option>
+                <option value={45}>45 שניות (5-6 קליפים)</option>
+                <option value={60}>60 שניות (6-8 קליפים)</option>
+              </select>
+              <p className="text-xs text-white/40">
+                מעל 10 שניות = כמה קליפים רצופים עם המשכיות ויזואלית. כל קליפ נוצר בנפרד באיכות מקסימלית.
+              </p>
             </div>
             <button
               onClick={runAutopilot}
@@ -270,20 +325,73 @@ export default function AutopilotPage() {
               {!videoUrl ? STAGE_LABEL.rendering : "הוידאו מוכן — בדוק ואשר"}
             </div>
 
-            {/* Video */}
+            {/* Video clips */}
             <section className="space-y-2">
-              <h2 className="text-xs font-semibold text-white/60 uppercase tracking-wider">וידאו</h2>
-              {videoUrl ? (
-                <video src={videoUrl} controls className="w-full rounded-xl border border-white/10 bg-zinc-900" />
-              ) : (
-                <div className="aspect-video bg-zinc-900 border border-white/10 rounded-xl flex items-center justify-center text-white/40 text-sm">
-                  <div className="text-center space-y-2">
-                    <div className="inline-block w-6 h-6 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
-                    <p>מרנדר וידאו...</p>
+              <h2 className="text-xs font-semibold text-white/60 uppercase tracking-wider">
+                וידאו{videoUrls.length > 1 ? ` (${videoUrls.length} קליפים)` : ""}
+              </h2>
+              <div className={videoUrls.length > 1 ? "grid grid-cols-1 md:grid-cols-2 gap-3" : ""}>
+                {videoUrls.length === 0 && (
+                  <div className="aspect-video bg-zinc-900 border border-white/10 rounded-xl flex items-center justify-center text-white/40 text-sm">
+                    <div className="text-center space-y-2">
+                      <div className="inline-block w-6 h-6 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
+                      <p>מרנדר וידאו...</p>
+                    </div>
                   </div>
-                </div>
+                )}
+                {videoUrls.map((url, i) => (
+                  <div key={i} className="space-y-1">
+                    {videoUrls.length > 1 && (
+                      <div className="text-xs text-white/40">קליפ {i + 1}/{videoUrls.length}</div>
+                    )}
+                    {url ? (
+                      <video src={url} controls className="w-full rounded-xl border border-white/10 bg-zinc-900" />
+                    ) : (
+                      <div className="aspect-[9/16] max-h-96 bg-zinc-900 border border-white/10 rounded-xl flex items-center justify-center text-white/40 text-sm">
+                        <div className="text-center space-y-2">
+                          <div className="inline-block w-5 h-5 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
+                          <p>מרנדר...</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {videoUrls.length > 1 && videoUrls.every((u) => u) && (
+                <p className="text-xs text-white/40">
+                  טיפ: הקליפים נוצרו עם המשכיות. ניתן לחבר אותם ביחד בעריכה (CapCut / Premiere) או להעלות כל אחד כקריאייטיב נפרד למודעה.
+                </p>
               )}
             </section>
+
+            {/* Sales images */}
+            {(imageUrls.length > 0 || (result.imageJobIds && result.imageJobIds.length > 0)) && (
+              <section className="space-y-2">
+                <h2 className="text-xs font-semibold text-white/60 uppercase tracking-wider">
+                  3 תמונות מכירתיות עם כיתובים
+                </h2>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {imageUrls.map((url, i) => (
+                    <div key={i} className="space-y-1">
+                      <div className="text-xs text-white/40">תמונה {i + 1}</div>
+                      {url ? (
+                        <a href={url} target="_blank" rel="noopener noreferrer">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={url} alt={`sales-${i}`} className="w-full rounded-xl border border-white/10 bg-zinc-900" />
+                        </a>
+                      ) : (
+                        <div className="aspect-[9/16] bg-zinc-900 border border-white/10 rounded-xl flex items-center justify-center text-white/40 text-xs">
+                          <div className="text-center space-y-2">
+                            <div className="inline-block w-5 h-5 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
+                            <p>מרנדר...</p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
 
             {/* Winning ad info */}
             <section className="bg-white/5 border border-white/10 rounded-xl p-5 space-y-3">
@@ -407,7 +515,8 @@ export default function AutopilotPage() {
               onClick={() => {
                 setStage("idle");
                 setResult(null);
-                setVideoUrl(null);
+                setVideoUrls([]);
+                setImageUrls([]);
                 setCompetitorInput("");
                 setLaunchInfo(null);
               }}

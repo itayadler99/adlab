@@ -1,9 +1,10 @@
 // Autopilot orchestrator: competitor URL -> winning ad -> matched product -> generated video + copy
 import { resolveFbPage, scrapeAdLibrary, type ApifyAd } from "./apify";
 import { anthropic, writeAdScript, writeHeadlines } from "./anthropic";
-import { startVideo, type VideoModel } from "./video";
+import { startVideoSequence, type VideoModel } from "./video";
 // VideoModel re-exported for callers
 import { getProducts, productUrl, type ShopProduct } from "./shopify";
+import { startSalesImages } from "./images";
 
 export interface AutopilotResult {
   competitorPageName?: string;
@@ -18,8 +19,12 @@ export interface AutopilotResult {
   cta: string;
   headlines: string[];
   bodyCopy: string;
-  videoJobId: string;
+  videoJobId: string; // first clip — kept for backward compat
+  videoJobIds: string[]; // full sequence (1..N clips)
+  videoClipSeconds: number;
+  videoTotalSeconds: number;
   videoModel: VideoModel;
+  imageJobIds: string[]; // sales static images (Ideogram v2)
   thumbnailUrl?: string;
   dailyBudget: number;
 }
@@ -315,17 +320,49 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
   // Default to Veo-3 Fast for high quality + 9:16 vertical (Meta Reels/Stories)
   const chosenModel: VideoModel = input.videoModel ?? "veo-3-fast";
   const chosenDuration = input.videoDuration ?? 8;
-  const videoJob = await startVideo(scriptOut.visual_prompt, chosenModel, {
-    duration: chosenDuration,
-    aspectRatio: "9:16",
-    resolution: "1080p",
-  });
+  const sequence = await startVideoSequence(
+    scriptOut.visual_prompt,
+    chosenModel,
+    chosenDuration,
+    { aspectRatio: "9:16", resolution: "1080p" }
+  );
 
   const headlinesOut = await writeHeadlines({
     productTitle: product.title,
     productDescription: product.description,
     language: "en",
   });
+
+  // Build short bullet points for the static sales images.
+  // Pull from themes when available; fall back to evergreen jewelry USPs.
+  const bullets = (analysis.body_themes && analysis.body_themes.length > 0
+    ? analysis.body_themes
+    : [
+        "Lifetime warranty",
+        "Conflict-free moissanite",
+        "Free worldwide shipping",
+        "30-day returns",
+      ]
+  ).slice(0, 4);
+
+  // Fire off 3 sales static images in parallel — don't block on failure.
+  let imageJobIds: string[] = [];
+  try {
+    const imageJobs = await startSalesImages(
+      {
+        productTitle: product.title,
+        productDescription: product.description,
+        hook: analysis.hook,
+        bullets,
+        brand: "Montier",
+      },
+      3
+    );
+    imageJobIds = imageJobs.map((j) => j.id);
+  } catch (e) {
+    // Don't fail the whole run if image gen fails
+    console.error("startSalesImages failed:", e);
+  }
 
   // Body copy: simple template referencing winning hook
   const bodyCopy = `${analysis.hook}\n\n${product.title} — ${product.description}\n\nShop now: ${product.link}`;
@@ -343,8 +380,12 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
     cta: scriptOut.cta,
     headlines: headlinesOut.headlines,
     bodyCopy,
-    videoJobId: videoJob.id,
-    videoModel: videoJob.model,
+    videoJobId: sequence.jobs[0].id,
+    videoJobIds: sequence.jobs.map((j) => j.id),
+    videoClipSeconds: sequence.clipSeconds,
+    videoTotalSeconds: sequence.totalSeconds,
+    videoModel: sequence.model,
+    imageJobIds,
     thumbnailUrl: analysis.thumbnailUrl,
     dailyBudget,
   };
