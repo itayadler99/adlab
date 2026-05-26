@@ -84,7 +84,7 @@ export async function startScrape(input: ApifyRunInput): Promise<string> {
   const body = {
     startUrls,
     maxResults: input.maxResults ?? 20,
-    activeStatus: "all",
+    activeStatus: "active",
     country: input.country || "US",
   };
   const run = await apifyFetch<ApifyRunResponse>(`/acts/${encodeURIComponent(ACTOR_ID)}/runs`, {
