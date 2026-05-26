@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { pollVideo } from "@/lib/video";
+import { pollVideo, type VideoModel } from "@/lib/video";
 import { pollImage } from "@/lib/images";
 import { db, updateVideo } from "@/lib/db";
 
@@ -10,6 +10,7 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const id = searchParams.get("id");
   const kind = (searchParams.get("kind") || "video").toLowerCase();
+  const model = (searchParams.get("model") || undefined) as VideoModel | undefined;
   if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
   try {
     if (kind === "image") {
@@ -21,7 +22,7 @@ export async function GET(req: Request) {
         error: img.error,
       });
     }
-    const job = await pollVideo(id);
+    const job = await pollVideo(id, model);
     // Only persist to Supabase if configured. Autopilot flow doesn't require DB.
     if (db && (job.status === "succeeded" || job.status === "failed")) {
       try {

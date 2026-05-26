@@ -317,8 +317,8 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
     duration: 15,
   });
 
-  // Default to Veo-3 Fast for high quality + 9:16 vertical (Meta Reels/Stories)
-  const chosenModel: VideoModel = input.videoModel ?? "veo-3-fast";
+  // Default to Veo 3.1 Fast (FAL) — frontier quality, native audio, 9:16 vertical.
+  const chosenModel: VideoModel = input.videoModel ?? "veo-3.1-fast";
   const chosenDuration = input.videoDuration ?? 8;
   const sequence = await startVideoSequence(
     scriptOut.visual_prompt,

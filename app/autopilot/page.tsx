@@ -37,20 +37,35 @@ const STAGE_LABEL: Record<Stage, string> = {
   error: "שגיאה",
 };
 
-type VideoModelChoice = "veo-3" | "veo-3-fast" | "kling-2.1" | "hailuo-02" | "seedance-1.0";
+type VideoModelChoice =
+  | "veo-3.1"
+  | "veo-3.1-fast"
+  | "kling-3.0"
+  | "seedance-2.0"
+  | "sora-2-pro"
+  | "veo-3"
+  | "veo-3-fast"
+  | "kling-2.1"
+  | "hailuo-02"
+  | "seedance-1.0";
 
 const VIDEO_MODELS: { value: VideoModelChoice; label: string; note: string }[] = [
-  { value: "veo-3", label: "Veo 3 — איכות מקסימלית", note: "8 שניות, קולנועי, יקר יותר" },
-  { value: "veo-3-fast", label: "Veo 3 Fast — מומלץ", note: "8 שניות, איכות גבוהה, מהיר" },
-  { value: "kling-2.1", label: "Kling 2.1 — מצוין למוצרים", note: "5-10 שניות, ריאליסטי" },
-  { value: "hailuo-02", label: "Hailuo 02", note: "6-10 שניות, תנועה חלקה" },
-  { value: "seedance-1.0", label: "Seedance 1.0 (Bytedance)", note: "5-10 שניות, מהיר" },
+  { value: "veo-3.1-fast", label: "Veo 3.1 Fast — מומלץ", note: "Google Veo 3.1, 8s, קול מובנה, מהיר ($)" },
+  { value: "veo-3.1", label: "Veo 3.1 — איכות פרימיום", note: "Google Veo 3.1 1080p, 8s, $$" },
+  { value: "kling-3.0", label: "Kling 3 Pro — מלך ה-UGC", note: "עד 15s, קול, סצנות מרובות ($$)" },
+  { value: "seedance-2.0", label: "Seedance 2.0 — תנועה מטורפת", note: "Bytedance, עד 10s ($)" },
+  { value: "sora-2-pro", label: "Sora 2 Pro — ריאליזם קיצוני", note: "OpenAI, איכות הגבוהה ביותר ($$$)" },
+  { value: "veo-3-fast", label: "Veo 3 Fast (ישן)", note: "Replicate, 8s" },
+  { value: "veo-3", label: "Veo 3 (ישן)", note: "Replicate, 8s" },
+  { value: "kling-2.1", label: "Kling 2.1 (ישן)", note: "Replicate, 5-10s" },
+  { value: "hailuo-02", label: "Hailuo 02 (ישן)", note: "Replicate, 6-10s" },
+  { value: "seedance-1.0", label: "Seedance 1.0 (ישן)", note: "Replicate" },
 ];
 
 export default function AutopilotPage() {
   const [competitorInput, setCompetitorInput] = useState("");
   const [dailyBudget, setDailyBudget] = useState(100);
-  const [videoModel, setVideoModel] = useState<VideoModelChoice>("veo-3-fast");
+  const [videoModel, setVideoModel] = useState<VideoModelChoice>("veo-3.1-fast");
   const [videoDuration, setVideoDuration] = useState(8);
   const [stage, setStage] = useState<Stage>("idle");
   const [error, setError] = useState("");
@@ -61,8 +76,12 @@ export default function AutopilotPage() {
   const [editedBody, setEditedBody] = useState("");
   const [editedBudget, setEditedBudget] = useState(100);
   const [launchInfo, setLaunchInfo] = useState<{ campaign_id?: string } | null>(null);
+  const [stitchedUrl, setStitchedUrl] = useState<string | null>(null);
+  const [stitching, setStitching] = useState(false);
+  const [stitchError, setStitchError] = useState("");
+  const stitchTriggeredRef = useRef(false);
   const pollersRef = useRef<number[]>([]);
-  const videoUrl = videoUrls[0] || null;
+  const videoUrl = stitchedUrl || videoUrls[0] || null;
 
   function clearAllPollers() {
     for (const id of pollersRef.current) window.clearInterval(id);
@@ -73,11 +92,12 @@ export default function AutopilotPage() {
     return () => clearAllPollers();
   }, []);
 
-  function pollJob(jobId: string, kind: "video" | "image", onDone: (url: string) => void, onFail: (msg: string) => void) {
+  function pollJob(jobId: string, kind: "video" | "image", onDone: (url: string) => void, onFail: (msg: string) => void, model?: string) {
     let failedAttempts = 0;
+    const modelQ = kind === "video" && model ? `&model=${encodeURIComponent(model)}` : "";
     const handle = window.setInterval(async () => {
       try {
-        const res = await fetch(`/api/poll?id=${encodeURIComponent(jobId)}&kind=${kind}`);
+        const res = await fetch(`/api/poll?id=${encodeURIComponent(jobId)}&kind=${kind}${modelQ}`);
         if (!res.ok) {
           failedAttempts += 1;
           if (failedAttempts >= 5) {
@@ -112,10 +132,14 @@ export default function AutopilotPage() {
     pollersRef.current.push(handle);
   }
 
-  function startPollingAll(videoIds: string[], imageIds: string[]) {
+  function startPollingAll(videoIds: string[], imageIds: string[], model?: string) {
     clearAllPollers();
     setVideoUrls(new Array(videoIds.length).fill(null));
     setImageUrls(new Array(imageIds.length).fill(null));
+    setStitchedUrl(null);
+    setStitching(false);
+    setStitchError("");
+    stitchTriggeredRef.current = false;
     videoIds.forEach((jid, idx) => {
       pollJob(
         jid,
@@ -132,7 +156,8 @@ export default function AutopilotPage() {
             setError(`ייצור הוידאו נכשל: ${msg}`);
             setStage("error");
           }
-        }
+        },
+        model
       );
     });
     imageIds.forEach((jid, idx) => {
@@ -152,6 +177,39 @@ export default function AutopilotPage() {
     });
   }
 
+  // Auto-stitch when all clips ready and N>1
+  useEffect(() => {
+    if (stitchTriggeredRef.current) return;
+    if (!result) return;
+    if (videoUrls.length <= 1) return;
+    if (!videoUrls.every((u) => !!u)) return;
+    stitchTriggeredRef.current = true;
+    setStitching(true);
+    setStitchError("");
+    (async () => {
+      try {
+        const res = await fetch("/api/stitch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            urls: videoUrls as string[],
+            clipSeconds: result.videoClipSeconds,
+          }),
+        });
+        const data = (await res.json()) as { url?: string; error?: string };
+        if (!res.ok || data.error || !data.url) {
+          setStitchError(data.error || "stitch failed");
+        } else {
+          setStitchedUrl(data.url);
+        }
+      } catch (e) {
+        setStitchError(e instanceof Error ? e.message : "stitch network error");
+      } finally {
+        setStitching(false);
+      }
+    })();
+  }, [videoUrls, result]);
+
   async function runAutopilot() {
     if (!competitorInput.trim()) {
       setError("הכנס כתובת מתחרה או שם מותג");
@@ -161,6 +219,8 @@ export default function AutopilotPage() {
     setResult(null);
     setVideoUrls([]);
     setImageUrls([]);
+    setStitchedUrl(null);
+    setStitchError("");
     setLaunchInfo(null);
     setStage("scanning");
 
@@ -182,7 +242,7 @@ export default function AutopilotPage() {
       setSelectedHeadline(0);
       setStage("rendering");
       const vids = data.videoJobIds && data.videoJobIds.length > 0 ? data.videoJobIds : [data.videoJobId];
-      startPollingAll(vids, data.imageJobIds || []);
+      startPollingAll(vids, data.imageJobIds || [], data.videoModel);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Network error");
       setStage("error");
@@ -330,6 +390,29 @@ export default function AutopilotPage() {
               <h2 className="text-xs font-semibold text-white/60 uppercase tracking-wider">
                 וידאו{videoUrls.length > 1 ? ` (${videoUrls.length} קליפים)` : ""}
               </h2>
+
+              {/* Stitched master video */}
+              {stitchedUrl && (
+                <div className="space-y-1">
+                  <div className="text-xs text-emerald-300">סרטון מלא מחובר</div>
+                  <video src={stitchedUrl} controls className="w-full rounded-xl border border-emerald-500/40 bg-zinc-900" />
+                </div>
+              )}
+
+              {/* Stitch status */}
+              {videoUrls.length > 1 && videoUrls.every((u) => u) && !stitchedUrl && (
+                <div className="bg-white/5 border border-white/10 rounded-lg p-3 text-sm text-white/70 flex items-center gap-3">
+                  {stitching ? (
+                    <>
+                      <div className="inline-block w-4 h-4 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
+                      <span>מחבר את הקליפים לסרטון אחד...</span>
+                    </>
+                  ) : stitchError ? (
+                    <span className="text-red-300">חיבור נכשל: {stitchError}</span>
+                  ) : null}
+                </div>
+              )}
+
               <div className={videoUrls.length > 1 ? "grid grid-cols-1 md:grid-cols-2 gap-3" : ""}>
                 {videoUrls.length === 0 && (
                   <div className="aspect-video bg-zinc-900 border border-white/10 rounded-xl flex items-center justify-center text-white/40 text-sm">
@@ -357,11 +440,6 @@ export default function AutopilotPage() {
                   </div>
                 ))}
               </div>
-              {videoUrls.length > 1 && videoUrls.every((u) => u) && (
-                <p className="text-xs text-white/40">
-                  טיפ: הקליפים נוצרו עם המשכיות. ניתן לחבר אותם ביחד בעריכה (CapCut / Premiere) או להעלות כל אחד כקריאייטיב נפרד למודעה.
-                </p>
-              )}
             </section>
 
             {/* Sales images */}
@@ -517,6 +595,8 @@ export default function AutopilotPage() {
                 setResult(null);
                 setVideoUrls([]);
                 setImageUrls([]);
+                setStitchedUrl(null);
+                setStitchError("");
                 setCompetitorInput("");
                 setLaunchInfo(null);
               }}

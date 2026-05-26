@@ -1,14 +1,47 @@
 import Replicate from "replicate";
+import * as falLib from "./fal";
 
-// Cinematic, top-quality video models on Replicate
+// Frontier video models. FAL-hosted models marked (FAL); rest run on Replicate.
 export type VideoModel =
-  | "veo-3"          // Google Veo 3 — best cinematic, 8s, $$$
-  | "veo-3-fast"     // Google Veo 3 Fast — cheaper Veo, 8s
-  | "kling-2.1"      // Kling 2.1 — great for UGC/product, 5/10s
-  | "kling-1.6"      // Kling 1.6 standard — solid baseline
-  | "hailuo-02"      // MiniMax Hailuo 02 — much better than video-01
-  | "seedance-1.0"   // Bytedance Seedance — fast + good motion
-  | "minimax";       // legacy minimax/video-01 (kept for back-compat)
+  | "sora-2-pro"     // (Replicate) OpenAI Sora 2 Pro — top realism
+  | "veo-3.1"        // (FAL) Google Veo 3.1 — frontier, 8s
+  | "veo-3.1-fast"   // (FAL) Veo 3.1 Fast — cheaper, 8s
+  | "kling-3.0"      // (FAL) Kling 3 Pro — frontier UGC, up to 15s
+  | "seedance-2.0"   // (FAL) Bytedance Seedance 2.0 — strong motion
+  | "veo-3"          // (Replicate) legacy Veo 3, 8s
+  | "veo-3-fast"     // (Replicate) legacy Veo 3 Fast, 8s
+  | "kling-2.1"      // (Replicate) Kling 2.1
+  | "kling-1.6"      // (Replicate) Kling 1.6 standard
+  | "hailuo-02"      // (Replicate) MiniMax Hailuo 02
+  | "seedance-1.0"   // (Replicate) Seedance 1
+  | "minimax";       // (Replicate) legacy minimax/video-01
+
+export type VideoProvider = "fal" | "replicate";
+
+interface ModelSpec {
+  provider: VideoProvider;
+  endpoint: string; // FAL endpoint slug OR Replicate model slug "owner/name"
+  maxSeconds: number;
+}
+
+const REGISTRY: Record<VideoModel, ModelSpec> = {
+  "sora-2-pro":   { provider: "replicate", endpoint: "openai/sora-2-pro",                            maxSeconds: 10 },
+  "veo-3.1":      { provider: "fal",       endpoint: "fal-ai/veo3.1",                                maxSeconds: 8  },
+  "veo-3.1-fast": { provider: "fal",       endpoint: "fal-ai/veo3.1/fast",                           maxSeconds: 8  },
+  "kling-3.0":    { provider: "fal",       endpoint: "fal-ai/kling-video/v3/pro/text-to-video",      maxSeconds: 15 },
+  "seedance-2.0": { provider: "fal",       endpoint: "fal-ai/bytedance/seedance-2.0/text-to-video",  maxSeconds: 10 },
+  "veo-3":        { provider: "replicate", endpoint: "google/veo-3",                                 maxSeconds: 8  },
+  "veo-3-fast":   { provider: "replicate", endpoint: "google/veo-3-fast",                            maxSeconds: 8  },
+  "kling-2.1":    { provider: "replicate", endpoint: "kwaivgi/kling-v2.1-master",                    maxSeconds: 10 },
+  "kling-1.6":    { provider: "replicate", endpoint: "kwaivgi/kling-v1.6-standard",                  maxSeconds: 10 },
+  "hailuo-02":    { provider: "replicate", endpoint: "minimax/hailuo-02",                            maxSeconds: 10 },
+  "seedance-1.0": { provider: "replicate", endpoint: "bytedance/seedance-1-pro",                     maxSeconds: 10 },
+  "minimax":      { provider: "replicate", endpoint: "minimax/video-01",                             maxSeconds: 6  },
+};
+
+export function getProvider(model: VideoModel): VideoProvider {
+  return REGISTRY[model].provider;
+}
 
 export interface VideoJob {
   id: string;
@@ -28,45 +61,42 @@ interface StartOpts {
 
 export async function startVideo(
   prompt: string,
-  model: VideoModel = "veo-3-fast",
+  model: VideoModel = "veo-3.1-fast",
   opts: StartOpts = {}
 ): Promise<VideoJob> {
   const duration = opts.duration ?? 8;
   const aspectRatio = opts.aspectRatio ?? "9:16"; // Meta vertical default
   const resolution = opts.resolution ?? "1080p";
+  const spec = REGISTRY[model];
 
-  // Map our friendly model name -> Replicate model slug + input shape
-  let replicateModel: `${string}/${string}`;
+  if (spec.provider === "fal") {
+    const input = buildFalInput(model, prompt, { duration, aspectRatio, resolution });
+    const { request_id } = await falLib.submit(spec.endpoint, input);
+    return { id: request_id, model, status: "pending" };
+  }
+
+  // Replicate path
   let input: Record<string, unknown> = { prompt };
-
   switch (model) {
     case "veo-3":
-      replicateModel = "google/veo-3";
-      input = { prompt, aspect_ratio: aspectRatio, duration_seconds: duration };
-      break;
     case "veo-3-fast":
-      replicateModel = "google/veo-3-fast";
       input = { prompt, aspect_ratio: aspectRatio, duration_seconds: duration };
       break;
     case "kling-2.1":
-      replicateModel = "kwaivgi/kling-v2.1-master";
-      input = { prompt, duration: duration <= 5 ? 5 : 10, aspect_ratio: aspectRatio };
-      break;
     case "kling-1.6":
-      replicateModel = "kwaivgi/kling-v1.6-standard";
       input = { prompt, duration: duration <= 5 ? 5 : 10, aspect_ratio: aspectRatio };
       break;
     case "hailuo-02":
-      replicateModel = "minimax/hailuo-02";
       input = { prompt, duration: Math.min(10, Math.max(6, duration)), resolution };
       break;
     case "seedance-1.0":
-      replicateModel = "bytedance/seedance-1-pro";
       input = { prompt, duration: Math.min(10, duration), aspect_ratio: aspectRatio, resolution };
+      break;
+    case "sora-2-pro":
+      input = { prompt, duration: Math.min(10, duration), aspect_ratio: aspectRatio };
       break;
     case "minimax":
     default:
-      replicateModel = "minimax/video-01";
       input = { prompt };
       break;
   }
@@ -75,32 +105,51 @@ export async function startVideo(
     model: `${string}/${string}`;
     input: Record<string, unknown>;
   }) => Promise<{ id: string }>)({
-    model: replicateModel,
+    model: spec.endpoint as `${string}/${string}`,
     input,
   });
 
-  return {
-    id: prediction.id,
-    model,
-    status: "pending",
-  };
+  return { id: prediction.id, model, status: "pending" };
+}
+
+function buildFalInput(
+  model: VideoModel,
+  prompt: string,
+  opts: { duration: number; aspectRatio: string; resolution: string }
+): Record<string, unknown> {
+  const { duration, aspectRatio, resolution } = opts;
+  switch (model) {
+    case "veo-3.1":
+    case "veo-3.1-fast":
+      return {
+        prompt,
+        aspect_ratio: aspectRatio,
+        resolution: resolution === "1080p" ? "1080p" : "720p",
+        duration: `${Math.min(8, Math.max(5, duration))}s`,
+        generate_audio: true,
+      };
+    case "kling-3.0":
+      return {
+        prompt,
+        duration: Math.min(15, Math.max(3, duration)),
+        aspect_ratio: aspectRatio,
+        audio: true,
+      };
+    case "seedance-2.0":
+      return {
+        prompt,
+        aspect_ratio: aspectRatio,
+        resolution,
+        duration: Math.min(10, Math.max(3, duration)),
+      };
+    default:
+      return { prompt };
+  }
 }
 
 /** Native max-seconds per clip on each model. Anything longer requires sequencing. */
 export function maxClipSeconds(model: VideoModel): number {
-  switch (model) {
-    case "veo-3":
-    case "veo-3-fast":
-      return 8;
-    case "kling-2.1":
-    case "kling-1.6":
-    case "hailuo-02":
-    case "seedance-1.0":
-      return 10;
-    case "minimax":
-    default:
-      return 6;
-  }
+  return REGISTRY[model].maxSeconds;
 }
 
 export interface VideoSequence {
@@ -140,7 +189,20 @@ export async function startVideoSequence(
   return { jobs, clipSeconds, totalSeconds: clipSeconds * clips, model };
 }
 
-export async function pollVideo(jobId: string, model: VideoModel = "veo-3-fast"): Promise<VideoJob> {
+export async function pollVideo(jobId: string, model: VideoModel = "veo-3.1-fast"): Promise<VideoJob> {
+  const spec = REGISTRY[model];
+
+  if (spec.provider === "fal") {
+    const out = await falLib.poll(spec.endpoint, jobId);
+    return {
+      id: jobId,
+      model,
+      status: out.status,
+      videoUrl: out.videoUrl,
+      error: out.error,
+    };
+  }
+
   const prediction = await replicate.predictions.get(jobId);
   const status = prediction.status as string;
 
