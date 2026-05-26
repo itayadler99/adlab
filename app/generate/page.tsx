@@ -10,28 +10,52 @@ const MODEL_OPTIONS: {
   available: boolean;
 }[] = [
   {
-    value: "minimax",
-    label: "Minimax Video-01",
-    description: "Fast, high-quality short-form video generation.",
+    value: "veo-3-fast",
+    label: "Veo 3 Fast",
+    description: "Google Veo 3 Fast — recommended default, 8s vertical 1080p.",
+    available: true,
+  },
+  {
+    value: "veo-3",
+    label: "Veo 3",
+    description: "Google Veo 3 — top cinematic quality, 8s.",
+    available: true,
+  },
+  {
+    value: "kling-2.1",
+    label: "Kling 2.1",
+    description: "Great for UGC/product, realistic motion, 5-10s.",
+    available: true,
+  },
+  {
+    value: "hailuo-02",
+    label: "Hailuo 02",
+    description: "MiniMax Hailuo 02 — smooth motion, 6-10s.",
+    available: true,
+  },
+  {
+    value: "seedance-1.0",
+    label: "Seedance 1.0",
+    description: "Bytedance Seedance — fast, good motion.",
     available: true,
   },
   {
     value: "kling-1.6",
     label: "Kling 1.6",
-    description: "Cinematic quality with strong motion consistency.",
+    description: "Solid cinematic baseline.",
     available: true,
   },
   {
-    value: "sora-2",
-    label: "Sora-2",
-    description: "OpenAI Sora-2 — REST API coming soon (currently MCP-only).",
-    available: false,
+    value: "minimax",
+    label: "Minimax Video-01 (legacy)",
+    description: "Fast, low cost, baseline quality.",
+    available: true,
   },
 ];
 
 export default function GeneratePage() {
   const [prompt, setPrompt] = useState("");
-  const [model, setModel] = useState<VideoModel>("minimax");
+  const [model, setModel] = useState<VideoModel>("veo-3-fast");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{
     jobId?: string;
@@ -154,16 +178,8 @@ export default function GeneratePage() {
           >
             {result.error ? (
               <>
-                <p className="font-semibold mb-1">
-                  {result.comingSoon ? "⏳ Coming Soon" : "❌ Error"}
-                </p>
+                <p className="font-semibold mb-1">Error</p>
                 <p>{result.error}</p>
-                {result.comingSoon && (
-                  <p className="mt-2 text-amber-400">
-                    Sora-2 REST API is expected to launch soon. In the meantime,
-                    use Minimax or Kling 1.6.
-                  </p>
-                )}
               </>
             ) : (
               <>

@@ -13,7 +13,6 @@ const FIVE_DAYS_MS = 5 * 24 * 60 * 60 * 1000;
 
 function normModel(m: string): VideoModel {
   if (m === "kling" || m === "kling-1.6") return "kling-1.6";
-  if (m === "sora-2") return "sora-2";
   return "minimax";
 }
 

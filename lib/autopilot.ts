@@ -2,6 +2,7 @@
 import { resolveFbPage, scrapeAdLibrary, type ApifyAd } from "./apify";
 import { anthropic, writeAdScript, writeHeadlines } from "./anthropic";
 import { startVideo, type VideoModel } from "./video";
+// VideoModel re-exported for callers
 import { getProducts, productUrl, type ShopProduct } from "./shopify";
 
 export interface AutopilotResult {
@@ -264,6 +265,8 @@ export async function pickProduct(themes: string[]): Promise<{ id?: string; titl
 export interface RunAutopilotInput {
   competitorInput: string;
   dailyBudget?: number;
+  videoModel?: VideoModel;
+  videoDuration?: number;
 }
 
 export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotResult> {
@@ -309,7 +312,14 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
     duration: 15,
   });
 
-  const videoJob = await startVideo(scriptOut.visual_prompt, "minimax");
+  // Default to Veo-3 Fast for high quality + 9:16 vertical (Meta Reels/Stories)
+  const chosenModel: VideoModel = input.videoModel ?? "veo-3-fast";
+  const chosenDuration = input.videoDuration ?? 8;
+  const videoJob = await startVideo(scriptOut.visual_prompt, chosenModel, {
+    duration: chosenDuration,
+    aspectRatio: "9:16",
+    resolution: "1080p",
+  });
 
   const headlinesOut = await writeHeadlines({
     productTitle: product.title,

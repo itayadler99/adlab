@@ -33,9 +33,21 @@ const STAGE_LABEL: Record<Stage, string> = {
   error: "שגיאה",
 };
 
+type VideoModelChoice = "veo-3" | "veo-3-fast" | "kling-2.1" | "hailuo-02" | "seedance-1.0";
+
+const VIDEO_MODELS: { value: VideoModelChoice; label: string; note: string }[] = [
+  { value: "veo-3", label: "Veo 3 — איכות מקסימלית", note: "8 שניות, קולנועי, יקר יותר" },
+  { value: "veo-3-fast", label: "Veo 3 Fast — מומלץ", note: "8 שניות, איכות גבוהה, מהיר" },
+  { value: "kling-2.1", label: "Kling 2.1 — מצוין למוצרים", note: "5-10 שניות, ריאליסטי" },
+  { value: "hailuo-02", label: "Hailuo 02", note: "6-10 שניות, תנועה חלקה" },
+  { value: "seedance-1.0", label: "Seedance 1.0 (Bytedance)", note: "5-10 שניות, מהיר" },
+];
+
 export default function AutopilotPage() {
   const [competitorInput, setCompetitorInput] = useState("");
   const [dailyBudget, setDailyBudget] = useState(100);
+  const [videoModel, setVideoModel] = useState<VideoModelChoice>("veo-3-fast");
+  const [videoDuration, setVideoDuration] = useState(8);
   const [stage, setStage] = useState<Stage>("idle");
   const [error, setError] = useState("");
   const [result, setResult] = useState<AutopilotResult | null>(null);
@@ -107,7 +119,7 @@ export default function AutopilotPage() {
       const res = await fetch("/api/autopilot/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ competitorInput, dailyBudget }),
+        body: JSON.stringify({ competitorInput, dailyBudget, videoModel, videoDuration }),
       });
       const data = (await res.json()) as AutopilotResult & { error?: string };
       if (!res.ok || data.error) {
@@ -201,6 +213,33 @@ export default function AutopilotPage() {
                 onChange={(e) => setDailyBudget(Number(e.target.value))}
                 className="w-full bg-black border border-white/15 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
               />
+            </div>
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-white/80">דגם וידאו</label>
+              <select
+                value={videoModel}
+                onChange={(e) => setVideoModel(e.target.value as VideoModelChoice)}
+                className="w-full bg-black border border-white/15 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
+              >
+                {VIDEO_MODELS.map((m) => (
+                  <option key={m.value} value={m.value}>{m.label}</option>
+                ))}
+              </select>
+              <p className="text-xs text-white/40">
+                {VIDEO_MODELS.find((m) => m.value === videoModel)?.note}
+              </p>
+            </div>
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-white/80">אורך וידאו (שניות)</label>
+              <input
+                type="number"
+                min={5}
+                max={10}
+                value={videoDuration}
+                onChange={(e) => setVideoDuration(Number(e.target.value))}
+                className="w-full bg-black border border-white/15 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
+              />
+              <p className="text-xs text-white/40">5-10 שניות. Veo נועל ל-8.</p>
             </div>
             <button
               onClick={runAutopilot}

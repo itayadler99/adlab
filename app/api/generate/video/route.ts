@@ -14,22 +14,19 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "prompt is required" }, { status: 400 });
     }
 
-    const allowedModels: VideoModel[] = ["minimax", "kling-1.6", "sora-2"];
+    const allowedModels: VideoModel[] = [
+      "minimax",
+      "kling-1.6",
+      "kling-2.1",
+      "hailuo-02",
+      "seedance-1.0",
+      "veo-3",
+      "veo-3-fast",
+    ];
     if (!allowedModels.includes(model)) {
       return NextResponse.json(
         { error: `Invalid model. Allowed: ${allowedModels.join(", ")}` },
         { status: 400 }
-      );
-    }
-
-    if (model === "sora-2") {
-      return NextResponse.json(
-        {
-          error:
-            "Sora-2 is not yet available via REST API. It is currently MCP-only. Please select minimax or kling-1.6.",
-          comingSoon: true,
-        },
-        { status: 503 }
       );
     }
 
