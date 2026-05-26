@@ -388,22 +388,42 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
       chosenDuration = chosenDuration ?? 15;
     }
     // Auto-pick model by duration to maximize "single-clip" feel.
-    // <=8s → Veo 3.1 Fast (8s native, 1080p, audio).
-    // 9-15s → Kling 3 Pro (15s native, no stitching needed).
-    // >15s → Kling 3 Pro sequenced (best continuity for stitching).
+    // If we have a real product image, ALWAYS route to image-to-video so the
+    // model anchors on the actual product instead of hallucinating jewelry.
+    // <=8s → Veo 3.1 Fast i2v (8s native, 1080p).
+    // 9-15s → Kling 3 Pro i2v (10s native, no stitching).
+    // >15s → Kling 3 Pro i2v sequenced.
+    const hasProductImg = Boolean(product.imageUrl);
     if (input.videoModel) {
       chosenModel = input.videoModel;
+      // Promote text-only models to i2v variants when we have a product image.
+      if (hasProductImg) {
+        if (chosenModel === "veo-3.1-fast") chosenModel = "veo-3.1-fast-i2v";
+        else if (chosenModel === "veo-3.1") chosenModel = "veo-3.1-i2v";
+        else if (chosenModel === "kling-3.0") chosenModel = "kling-3.0-i2v";
+      }
+    } else if (hasProductImg) {
+      chosenModel = chosenDuration <= 8 ? "veo-3.1-fast-i2v" : "kling-3.0-i2v";
     } else if (chosenDuration <= 8) {
       chosenModel = "veo-3.1-fast";
     } else {
       chosenModel = "kling-3.0";
     }
-    console.log("[autopilot] starting video sequence: model=", chosenModel, "duration=", chosenDuration);
+    // Strengthen the prompt with the explicit product name so models that
+    // partially honor the seed image still keep the same item.
+    const productAnchor = hasProductImg
+      ? `\n\nThe single product visible in the video is the EXACT item shown in the reference image: ${product.title}. Do not invent or substitute jewelry. Hold the camera close enough that the product reads clearly.`
+      : "";
+    console.log("[autopilot] starting video sequence: model=", chosenModel, "duration=", chosenDuration, "i2v=", hasProductImg);
     const sequence = await startVideoSequence(
-      scriptOut.visual_prompt,
+      scriptOut.visual_prompt + productAnchor,
       chosenModel,
       chosenDuration,
-      { aspectRatio: "9:16", resolution: "1080p" }
+      {
+        aspectRatio: "9:16",
+        resolution: "1080p",
+        ...(hasProductImg ? { imageUrl: product.imageUrl } : {}),
+      }
     );
     videoJobId = sequence.jobs[0].id;
     videoJobIds = sequence.jobs.map((j) => j.id);

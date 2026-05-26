@@ -74,6 +74,11 @@ const FAL_FALLBACK: Partial<Record<VideoModel, VideoModel>> = {
   "veo-3.1": "veo-3",
   "kling-3.0": "kling-2.1",
   "seedance-2.0": "seedance-1.0",
+  // Image-to-video fallbacks: kling-2.1 on Replicate supports start_image,
+  // hailuo-02 supports first_frame_image. Both preserve product fidelity.
+  "veo-3.1-fast-i2v": "kling-2.1",
+  "veo-3.1-i2v": "kling-2.1",
+  "kling-3.0-i2v": "kling-2.1",
 };
 
 function isFalAuthError(e: unknown): boolean {
@@ -143,13 +148,30 @@ export async function startVideo(
       break;
     case "kling-2.1":
     case "kling-1.6":
-      input = { prompt, duration: duration <= 5 ? 5 : 10, aspect_ratio: aspectRatio };
+      input = {
+        prompt,
+        duration: duration <= 5 ? 5 : 10,
+        aspect_ratio: aspectRatio,
+        // start_image anchors output on the actual product photo (i2v).
+        ...(opts.imageUrl ? { start_image: opts.imageUrl } : {}),
+      };
       break;
     case "hailuo-02":
-      input = { prompt, duration: Math.min(10, Math.max(6, duration)), resolution };
+      input = {
+        prompt,
+        duration: Math.min(10, Math.max(6, duration)),
+        resolution,
+        ...(opts.imageUrl ? { first_frame_image: opts.imageUrl } : {}),
+      };
       break;
     case "seedance-1.0":
-      input = { prompt, duration: Math.min(10, duration), aspect_ratio: aspectRatio, resolution };
+      input = {
+        prompt,
+        duration: Math.min(10, duration),
+        aspect_ratio: aspectRatio,
+        resolution,
+        ...(opts.imageUrl ? { image: opts.imageUrl } : {}),
+      };
       break;
     case "sora-2-pro":
       input = { prompt, duration: Math.min(10, duration), aspect_ratio: aspectRatio };
