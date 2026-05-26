@@ -66,6 +66,22 @@ interface StartOpts {
   imageUrl?: string; // for image-to-video models
 }
 
+// When a frontier FAL endpoint returns auth/gating errors (account doesn't have
+// access to gated Veo 3.1, Kling 3 Pro, etc.), silently fall back to the closest
+// Replicate-hosted equivalent so the run still succeeds.
+const FAL_FALLBACK: Partial<Record<VideoModel, VideoModel>> = {
+  "veo-3.1-fast": "veo-3-fast",
+  "veo-3.1": "veo-3",
+  "kling-3.0": "kling-2.1",
+  "seedance-2.0": "seedance-1.0",
+};
+
+function isFalAuthError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  // FAL returns "Unauthorized" or "Cannot access application ..." for gated models
+  return /unauthorized|cannot access application|forbidden/i.test(msg);
+}
+
 export async function startVideo(
   prompt: string,
   model: VideoModel = "veo-3.1-fast",
@@ -78,8 +94,17 @@ export async function startVideo(
 
   if (spec.provider === "fal") {
     const input = buildFalInput(model, prompt, { duration, aspectRatio, resolution, imageUrl: opts.imageUrl });
-    const { request_id } = await falLib.submit(spec.endpoint, input);
-    return { id: request_id, model, status: "pending" };
+    try {
+      const { request_id } = await falLib.submit(spec.endpoint, input);
+      return { id: request_id, model, status: "pending" };
+    } catch (e) {
+      const fallback = FAL_FALLBACK[model];
+      if (fallback && isFalAuthError(e)) {
+        console.warn(`[video] FAL ${model} (${spec.endpoint}) unauthorized — falling back to ${fallback}`);
+        return startVideo(prompt, fallback, opts);
+      }
+      throw e;
+    }
   }
 
   // Replicate path
