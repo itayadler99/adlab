@@ -16,7 +16,9 @@ async function tryApify(
   try {
     const { scrapeAdLibrary } = await import("@/lib/apify");
     const idMatch = originalUrl.match(/[?&]id=(\d+)/);
-    const result = await scrapeAdLibrary({ adArchiveId: idMatch?.[1], country: "US" });
+    if (!idMatch?.[1]) return null;
+    const searchUrl = `https://www.facebook.com/ads/library/?id=${idMatch[1]}`;
+    const result = await scrapeAdLibrary({ searchUrl, country: "US" });
     if (result && Array.isArray(result) && result.length > 0) {
       const ad = result[0] as any;
       return (

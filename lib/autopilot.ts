@@ -1,5 +1,5 @@
 // Autopilot orchestrator: competitor URL -> winning ad -> matched product -> generated video + copy
-import { scrapeAdLibrary, type ApifyAd } from "./apify";
+import { resolveFbPage, scrapeAdLibrary, type ApifyAd } from "./apify";
 import { anthropic, writeAdScript, writeHeadlines } from "./anthropic";
 import { startVideo, type VideoModel } from "./video";
 import { getProducts, productUrl, type ShopProduct } from "./shopify";
@@ -24,37 +24,63 @@ export interface AutopilotResult {
 }
 
 export interface ResolvedCompetitor {
-  pageId?: string;
-  searchTerm: string;
+  adLibraryPageId?: string; // page id usable in FB Ad Library view_all_page_id (rare — usually different from real pageId)
+  facebookPageUrl?: string; // e.g. https://www.facebook.com/icecartel/  — used to look up pageAdLibrary.id
+  brand: string;
   isAdLibraryUrl: boolean;
 }
 
 export function resolveCompetitor(input: string): ResolvedCompetitor {
   const trimmed = input.trim();
-  // FB Ad Library URL
+  // 1. Ad Library URL with view_all_page_id
   if (/facebook\.com\/ads\/library/i.test(trimmed)) {
     try {
       const u = new URL(trimmed);
-      const pageId = u.searchParams.get("view_all_page_id") || undefined;
-      const searchTerm = u.searchParams.get("q") || "";
-      return { pageId, searchTerm: searchTerm || pageId || trimmed, isAdLibraryUrl: true };
+      const pid = u.searchParams.get("view_all_page_id") || undefined;
+      return {
+        adLibraryPageId: pid,
+        brand: pid || u.searchParams.get("q") || trimmed,
+        isAdLibraryUrl: true,
+      };
     } catch {
-      return { searchTerm: trimmed, isAdLibraryUrl: true };
+      return { brand: trimmed, isAdLibraryUrl: true };
     }
   }
-  // Plain URL -> extract brand from hostname
+  // 2. Facebook page URL: https://facebook.com/<slug>
+  if (/facebook\.com\//i.test(trimmed)) {
+    return { facebookPageUrl: trimmed, brand: trimmed, isAdLibraryUrl: false };
+  }
+  // 3. Full URL -> use hostname slug to guess FB page
   if (/^https?:\/\//i.test(trimmed)) {
     try {
       const u = new URL(trimmed);
       const host = u.hostname.replace(/^www\./, "");
-      const brand = host.split(".")[0];
-      return { searchTerm: brand, isAdLibraryUrl: false };
+      const slug = host.split(".")[0];
+      return {
+        facebookPageUrl: `https://www.facebook.com/${encodeURIComponent(slug)}/`,
+        brand: slug,
+        isAdLibraryUrl: false,
+      };
     } catch {
-      return { searchTerm: trimmed, isAdLibraryUrl: false };
+      return { brand: trimmed, isAdLibraryUrl: false };
     }
   }
-  // Plain brand name
-  return { searchTerm: trimmed, isAdLibraryUrl: false };
+  // 4. Bare domain
+  if (/^[a-z0-9-]+\.[a-z]{2,}(\.[a-z]{2,})?$/i.test(trimmed)) {
+    const slug = trimmed.replace(/^www\./, "").split(".")[0];
+    return {
+      facebookPageUrl: `https://www.facebook.com/${encodeURIComponent(slug)}/`,
+      brand: slug,
+      isAdLibraryUrl: false,
+    };
+  }
+  // 5. Plain brand name -> guess FB slug
+  const slug = trimmed.toLowerCase().replace(/\s+/g, "");
+  return {
+    facebookPageUrl: `https://www.facebook.com/${encodeURIComponent(slug)}/`,
+    brand: trimmed,
+    isAdLibraryUrl: false,
+  };
 }
 
 interface ScoredAd extends ApifyAd {
@@ -81,6 +107,8 @@ export function scoreAds(ads: ApifyAd[]): ScoredAd[] {
     }
     // Has video
     if (ad.snapshot?.videos && ad.snapshot.videos.length > 0) score += 20;
+    // Has any creative (body or visual)
+    if (ad.snapshot?.body || (ad.snapshot?.images?.length ?? 0) > 0) score += 5;
     // Variants
     const body = ad.snapshot?.body?.trim().slice(0, 120);
     if (body) {
@@ -88,13 +116,9 @@ export function scoreAds(ads: ApifyAd[]): ScoredAd[] {
       if (variants > 1) score += 30 * Math.min(3, variants);
     }
     // Cross-platform
-    const pp = (ad as { publisherPlatform?: string[] }).publisherPlatform;
-    if (Array.isArray(pp) && pp.length > 1) score += 15;
-    // Impressions
-    const impUpper = ad.impressions?.upperBound ? parseInt(ad.impressions.upperBound, 10) : 0;
-    if (impUpper > 0) {
-      score += Math.min(40, Math.log10(impUpper) * 6);
-    }
+    if (Array.isArray(ad.publisherPlatform) && ad.publisherPlatform.length > 1) score += 15;
+    // Active right now bonus
+    if (ad.isActive) score += 10;
     return { ...ad, _score: score };
   });
 
@@ -246,20 +270,29 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
   const dailyBudget = input.dailyBudget ?? 100;
   const resolved = resolveCompetitor(input.competitorInput);
 
-  // Build apify input
-  const apifyInput: { searchPageIDs?: string[]; searchTerms?: string[]; country: string; maxResults: number } = {
-    country: "US",
-    maxResults: 30,
-  };
-  if (resolved.pageId) {
-    apifyInput.searchPageIDs = [resolved.pageId];
-  } else {
-    apifyInput.searchTerms = [resolved.searchTerm];
+  // Step 1: resolve to a pageAdLibrary id (the id Ad Library URLs actually use).
+  let pageAdLibraryId = resolved.adLibraryPageId;
+  let competitorName: string | undefined;
+  if (!pageAdLibraryId && resolved.facebookPageUrl) {
+    const page = await resolveFbPage({ url: resolved.facebookPageUrl }, 120_000);
+    if (page) {
+      pageAdLibraryId = page.pageAdLibraryId || page.pageId;
+      competitorName = page.name;
+      if (!page.isCurrentlyRunningAds && !pageAdLibraryId) {
+        throw new Error(`'${page.name || resolved.brand}' לא מריץ מודעות כרגע בפייסבוק`);
+      }
+    }
+  }
+  if (!pageAdLibraryId) {
+    throw new Error(
+      "לא הצלחתי לזהות את עמוד הפייסבוק של המתחרה. נסה להדביק כתובת ספריית מודעות ישירות (Ad Library) עם view_all_page_id"
+    );
   }
 
-  const ads = await scrapeAdLibrary(apifyInput, 180_000);
+  // Step 2: scrape ads
+  const ads = await scrapeAdLibrary({ pageAdLibraryId, country: "US", maxResults: 30 }, 240_000);
   if (!ads || ads.length === 0) {
-    throw new Error("לא נמצאו מודעות פעילות למתחרה הזה");
+    throw new Error(`'${competitorName || resolved.brand}' אין מודעות פעילות ב-US`);
   }
 
   const scored = scoreAds(ads);
@@ -288,7 +321,7 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
   const bodyCopy = `${analysis.hook}\n\n${product.title} — ${product.description}\n\nShop now: ${product.link}`;
 
   return {
-    competitorPageName: winner.pageName,
+    competitorPageName: winner.pageName || competitorName,
     winningAdId: winner.adArchiveId,
     winningAdSummary: analysis.summary,
     winningAdHook: analysis.hook,

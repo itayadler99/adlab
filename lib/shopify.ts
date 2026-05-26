@@ -31,6 +31,9 @@ export async function getProduct(id: number) {
   return shopGet(`/products/${id}.json`);
 }
 
+// Storefront domain (where shoppers land). Differs from admin domain (xxx.myshopify.com).
+const STOREFRONT = process.env.SHOPIFY_STOREFRONT_DOMAIN || process.env.LINK_MONTIER_US?.replace(/^https?:\/\//, "").replace(/\/$/, "") || "montierjewelry.com";
+
 export function productUrl(handle: string) {
-  return `https://${SHOP.replace(".myshopify.com", "")}/products/${handle}`;
+  return `https://${STOREFRONT}/products/${handle}`;
 }
