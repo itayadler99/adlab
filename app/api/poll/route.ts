@@ -33,6 +33,15 @@ export async function GET(req: Request) {
     }
     return NextResponse.json(job);
   } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    const msg = e?.message || String(e);
+    // Transient upstream errors (404 from wrong-provider polling, momentary
+    // unavailability, rate limit) shouldn't terminate the client's polling.
+    // Surface as processing; client has its own retry cap.
+    const terminal = /unauthorized|forbidden|invalid token|400|expired/i.test(msg);
+    if (terminal) {
+      return NextResponse.json({ status: "failed", error: msg }, { status: 200 });
+    }
+    console.warn("[poll] transient error:", msg);
+    return NextResponse.json({ status: "processing", error: msg }, { status: 200 });
   }
 }

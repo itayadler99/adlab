@@ -271,7 +271,11 @@ export async function startVideoSequence(
     const j = await startVideo(part, model, { ...opts, duration: clipSeconds });
     jobs.push(j);
   }
-  return { jobs, clipSeconds, totalSeconds: clipSeconds * clips, model };
+  // Report the EFFECTIVE model (post-fallback) so the client polls the right
+  // provider. If FAL was gated and we fell back to Replicate, jobs[0].model
+  // already reflects the swap.
+  const effectiveModel = jobs[0]?.model ?? model;
+  return { jobs, clipSeconds, totalSeconds: clipSeconds * clips, model: effectiveModel };
 }
 
 export async function pollVideo(jobId: string, model: VideoModel = "veo-3.1-fast"): Promise<VideoJob> {
