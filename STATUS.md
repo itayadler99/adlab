@@ -39,5 +39,33 @@ Blockers
   binary may push the function over the 50 MB unzipped limit. Pro plan
   raises this to 250 MB. The first two tiers cover this gracefully.
 
-Next: Phase 2 — Showcase mode (product-only ads via nano-banana hero +
-seedance-1-pro animate).
+## Phase 2 — Showcase mode ✅ done
+
+What changed
+- `lib/showcase.ts` — new state machine for the product-only path. Stage 1
+  composites a luxury hero shot via FAL `nano-banana/edit` anchored on
+  the Shopify product image. Stage 2 animates to a 10s 1080p clip via
+  Replicate `bytedance/seedance-1-pro`, with `kwaivgi/kling-v2.1-master`
+  as the in-state fallback if seedance rejects.
+- `lib/showcase.ts` exports `shouldUseShowcase()` which routes "demo"
+  style competitor ads (and small-wearable founder_pov) to this path.
+- `app/api/showcase/start` + `app/api/showcase/advance` mirror the
+  UGC tick pattern (stateless server, client holds state).
+- `lib/autopilot.ts` — `AutopilotMode` now includes `"showcase"`;
+  result carries `showcaseInputs` (analogous to `ugcInputs`); auto-mode
+  picks showcase when `shouldUseShowcase()` returns true.
+- `app/autopilot/page.tsx` — added `ShowcaseState` type, tick loop,
+  pipeline progress card, and a "תצוגת מוצר" option in the mode
+  dropdown.
+
+What was tested
+- `npx tsc --noEmit` clean.
+- `npm run build` — both new routes `/api/showcase/start` and
+  `/api/showcase/advance` registered. End-to-end run pending Vercel
+  deploy.
+
+Blockers
+- None new. FAL `nano-banana/edit` and Replicate `seedance-1-pro` are
+  both confirmed accessible in the current env.
+
+Next: Phase 3 — Post-processing (RIFE 24→48fps + grain + LUT).

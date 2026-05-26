@@ -6,8 +6,9 @@ import { startVideoSequence, type VideoModel } from "./video";
 import { getProducts, productUrl, type ShopProduct } from "./shopify";
 import { startSalesImages } from "./images";
 import { getVideoDurationSec } from "./video-meta";
+import { shouldUseShowcase, type ShowcaseInputs } from "./showcase";
 
-export type AutopilotMode = "video" | "ugc";
+export type AutopilotMode = "video" | "ugc" | "showcase";
 
 export interface AutopilotResult {
   competitorPageName?: string;
@@ -41,6 +42,8 @@ export interface AutopilotResult {
     demographic?: string;
     voiceArchetype?: string;
   };
+  // Showcase pipeline (mode = "showcase")
+  showcaseInputs?: ShowcaseInputs;
   imageJobIds: string[]; // sales static images (Ideogram v2)
   thumbnailUrl?: string;
   dailyBudget: number;
@@ -304,7 +307,7 @@ export interface RunAutopilotInput {
   videoModel?: VideoModel;
   videoDuration?: number;
   /** "auto" picks UGC for ugc_review/yapping styles, otherwise plain video. */
-  mode?: "auto" | "video" | "ugc";
+  mode?: "auto" | "video" | "ugc" | "showcase";
   language?: "en" | "he";
 }
 
@@ -351,16 +354,28 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
     duration: 15,
   });
 
-  // Decide mode: explicit override, else "auto" → UGC for ugc_review / yapping (when we have a product image).
+  // Decide mode:
+  // - Explicit override always wins.
+  // - "auto": UGC for ugc_review/yapping with a product image, showcase for
+  //   product-focused styles (demo / small-wearable founder_pov), else plain video.
   const requestedMode = input.mode ?? "auto";
+  const wantsShowcase = shouldUseShowcase({
+    hasProductImage: Boolean(product.imageUrl),
+    style: analysis.style,
+    productTitle: product.title,
+  });
   const mode: AutopilotMode =
     requestedMode === "ugc"
       ? "ugc"
       : requestedMode === "video"
         ? "video"
-        : (analysis.style === "ugc_review" || analysis.style === "yapping") && product.imageUrl
-          ? "ugc"
-          : "video";
+        : requestedMode === "showcase"
+          ? "showcase"
+          : (analysis.style === "ugc_review" || analysis.style === "yapping") && product.imageUrl
+            ? "ugc"
+            : wantsShowcase
+              ? "showcase"
+              : "video";
 
   // Video pipeline (skipped in UGC mode)
   let videoJobId: string | undefined;
@@ -500,6 +515,17 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
         }
       : undefined;
 
+  const showcaseInputs: ShowcaseInputs | undefined =
+    mode === "showcase" && product.imageUrl
+      ? {
+          productTitle: product.title,
+          productImageUrl: product.imageUrl,
+          hook: analysis.hook,
+          // Seedance 1 Pro native max is 10s; longer ads get stitched downstream.
+          durationSec: Math.min(10, Math.max(5, input.videoDuration ?? 10)),
+        }
+      : undefined;
+
   return {
     competitorPageName: winner.pageName || competitorName,
     winningAdId: winner.adArchiveId,
@@ -520,6 +546,7 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
     videoTotalSeconds,
     videoModel: chosenModel,
     ugcInputs,
+    showcaseInputs,
     imageJobIds,
     thumbnailUrl: analysis.thumbnailUrl,
     dailyBudget,
