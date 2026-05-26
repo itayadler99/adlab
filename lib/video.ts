@@ -82,6 +82,30 @@ function isFalAuthError(e: unknown): boolean {
   return /unauthorized|cannot access application|forbidden/i.test(msg);
 }
 
+function isRateLimitError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return /429|too many requests|rate limit/i.test(msg);
+}
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+// Retry on 429 with exponential backoff: 2s, 5s, 12s.
+async function withRateLimitRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
+  const delays = [2000, 5000, 12000];
+  for (let i = 0; i <= delays.length; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (i === delays.length || !isRateLimitError(e)) throw e;
+      console.warn(`[video] ${label} rate-limited (attempt ${i + 1}/${delays.length + 1}) — backing off ${delays[i]}ms`);
+      await sleep(delays[i]);
+    }
+  }
+  throw new Error(`${label}: unreachable`);
+}
+
 export async function startVideo(
   prompt: string,
   model: VideoModel = "veo-3.1-fast",
@@ -95,7 +119,10 @@ export async function startVideo(
   if (spec.provider === "fal") {
     const input = buildFalInput(model, prompt, { duration, aspectRatio, resolution, imageUrl: opts.imageUrl });
     try {
-      const { request_id } = await falLib.submit(spec.endpoint, input);
+      const { request_id } = await withRateLimitRetry(
+        () => falLib.submit(spec.endpoint, input),
+        `FAL ${model}`
+      );
       return { id: request_id, model, status: "pending" };
     } catch (e) {
       const fallback = FAL_FALLBACK[model];
@@ -133,13 +160,17 @@ export async function startVideo(
       break;
   }
 
-  const prediction = await (replicate.predictions.create as (args: {
-    model: `${string}/${string}`;
-    input: Record<string, unknown>;
-  }) => Promise<{ id: string }>)({
-    model: spec.endpoint as `${string}/${string}`,
-    input,
-  });
+  const prediction = await withRateLimitRetry(
+    () =>
+      (replicate.predictions.create as (args: {
+        model: `${string}/${string}`;
+        input: Record<string, unknown>;
+      }) => Promise<{ id: string }>)({
+        model: spec.endpoint as `${string}/${string}`,
+        input,
+      }),
+    `Replicate ${model}`
+  );
 
   return { id: prediction.id, model, status: "pending" };
 }
@@ -235,6 +266,8 @@ export async function startVideoSequence(
               ? "opening shot — establish subject, outfit, location, lighting."
               : "direct continuation of previous scene — keep the same subject, same outfit, same location, same lighting, natural cut. Push the story forward."
           })`;
+    // Space submissions to stay under per-second rate caps (Replicate is strict).
+    if (i > 0) await sleep(1800);
     const j = await startVideo(part, model, { ...opts, duration: clipSeconds });
     jobs.push(j);
   }
