@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 const navItems = [
+  { href: "/autopilot", label: "Autopilot", icon: "🤖", desc: "Paste competitor URL → live Meta campaign in one click" },
   { href: "/app/generate", label: "Generate", icon: "🎬", desc: "Create video ads from your products" },
   { href: "/app/spy", label: "Spy", icon: "🕵️", desc: "Analyse competitor Facebook ads" },
   { href: "/app/launch", label: "Launch", icon: "🚀", desc: "Push campaigns to Meta" },
