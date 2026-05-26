@@ -83,28 +83,16 @@ const STAGE_LABEL: Record<Stage, string> = {
 };
 
 type VideoModelChoice =
-  | "veo-3.1"
   | "veo-3.1-fast"
-  | "kling-3.0"
-  | "seedance-2.0"
   | "sora-2-pro"
-  | "veo-3"
-  | "veo-3-fast"
-  | "kling-2.1"
-  | "hailuo-02"
-  | "seedance-1.0";
+  | "kling-3.0"
+  | "seedance-2.0";
 
 const VIDEO_MODELS: { value: VideoModelChoice; label: string; note: string }[] = [
-  { value: "veo-3.1-fast", label: "Veo 3.1 Fast — מומלץ", note: "Google Veo 3.1, 8s, קול מובנה, מהיר ($)" },
-  { value: "veo-3.1", label: "Veo 3.1 — איכות פרימיום", note: "Google Veo 3.1 1080p, 8s, $$" },
-  { value: "kling-3.0", label: "Kling 3 Pro — מלך ה-UGC", note: "עד 15s, קול, סצנות מרובות ($$)" },
-  { value: "seedance-2.0", label: "Seedance 2.0 — תנועה מטורפת", note: "Bytedance, עד 10s ($)" },
-  { value: "sora-2-pro", label: "Sora 2 Pro — ריאליזם קיצוני", note: "OpenAI, איכות הגבוהה ביותר ($$$)" },
-  { value: "veo-3-fast", label: "Veo 3 Fast (ישן)", note: "Replicate, 8s" },
-  { value: "veo-3", label: "Veo 3 (ישן)", note: "Replicate, 8s" },
-  { value: "kling-2.1", label: "Kling 2.1 (ישן)", note: "Replicate, 5-10s" },
-  { value: "hailuo-02", label: "Hailuo 02 (ישן)", note: "Replicate, 6-10s" },
-  { value: "seedance-1.0", label: "Seedance 1.0 (ישן)", note: "Replicate" },
+  { value: "veo-3.1-fast", label: "Veo 3.1 Fast — מומלץ", note: "Google Veo 3.1, 8s, קול מובנה, איכות מצוינת ($)" },
+  { value: "sora-2-pro", label: "Sora 2 Pro — ריאליזם מקסימלי", note: "OpenAI, פרימיום, איכות הגבוהה ביותר ($$$)" },
+  { value: "kling-3.0", label: "Kling 3 Pro — סרטון ארוך", note: "עד 15 שניות, מלך ה-UGC הארוך ($$)" },
+  { value: "seedance-2.0", label: "Seedance 2.0 — תנועה דינמית", note: "Bytedance, ספורט/מחול/אקשן ($)" },
 ];
 
 export default function AutopilotPage() {
