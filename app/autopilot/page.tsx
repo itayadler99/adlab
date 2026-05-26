@@ -132,7 +132,7 @@ export default function AutopilotPage() {
   const [videoModel, setVideoModel] = useState<VideoModelChoice>("veo-3.1-fast");
   const [videoDuration, setVideoDuration] = useState(0); // 0 = auto-detect from competitor
   const [adMode, setAdMode] = useState<"auto" | "video" | "ugc" | "showcase">("auto");
-  const [postProcess, setPostProcess] = useState<"off" | "fast" | "speel">("fast");
+  const [postProcess, setPostProcess] = useState<"off" | "fast" | "speel" | "speel-4k">("fast");
   const [language, setLanguage] = useState<"en" | "he">("en");
   const [stage, setStage] = useState<Stage>("idle");
   const [error, setError] = useState("");
@@ -670,15 +670,16 @@ export default function AutopilotPage() {
               <label className="block text-sm font-medium text-white/80">שיפור ריאליזם (פוסט-פרודקשן)</label>
               <select
                 value={postProcess}
-                onChange={(e) => setPostProcess(e.target.value as "off" | "fast" | "speel")}
+                onChange={(e) => setPostProcess(e.target.value as "off" | "fast" | "speel" | "speel-4k")}
                 className="w-full bg-black border border-white/15 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
               >
                 <option value="fast">מהיר — גרעין סרט + תיקון צבע (מומלץ)</option>
                 <option value="speel">מקסימום — אינטרפולציה ל-48fps + גרעין + צבע</option>
+                <option value="speel-4k">איכות Speel — 48fps + שדרוג ל-4K + גרעין</option>
                 <option value="off">כבוי — סרטון גולמי בלי שיפור</option>
               </select>
               <p className="text-xs text-white/40">
-                מהיר: כ-10 שניות, חינם. מקסימום: כ-60 שניות, ~$0.05, סרטון חלק יותר וקרוב יותר ל-iPhone.
+                מהיר: כ-10 שניות, חינם. מקסימום: כ-60 שניות, ~$0.05. איכות Speel: כ-3 דקות, ~$0.20, 4K משודרג.
               </p>
             </div>
             <button

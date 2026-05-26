@@ -14,7 +14,7 @@ import { mkdtemp, rm, writeFile, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-export type PostProcessLevel = "off" | "fast" | "speel";
+export type PostProcessLevel = "off" | "fast" | "speel" | "speel-4k";
 
 export interface PostProcessOpts {
   level?: PostProcessLevel;
@@ -26,25 +26,32 @@ export interface PostProcessResult {
     level: PostProcessLevel;
     rifeApplied: boolean;
     ffmpegApplied: boolean;
+    upscaleApplied: boolean;
     error?: string;
   };
 }
 
 const RIFE_MODEL = "pollinations/rife";
+const UPSCALE_MODEL = "lucataco/real-esrgan-video";
 
 export async function applyRealism(
   videoUrl: string,
   opts: PostProcessOpts = {}
 ): Promise<PostProcessResult> {
   const level: PostProcessLevel = opts.level ?? "fast";
-  const trace = { level, rifeApplied: false, ffmpegApplied: false } as PostProcessResult["trace"];
+  const trace = {
+    level,
+    rifeApplied: false,
+    ffmpegApplied: false,
+    upscaleApplied: false,
+  } as PostProcessResult["trace"];
 
   if (level === "off") return { url: videoUrl, trace };
 
   let workingUrl = videoUrl;
 
-  // Step 1 (speel only): Replicate RIFE for 2x frame interpolation.
-  if (level === "speel" && process.env.REPLICATE_API_TOKEN) {
+  // Step 1 (speel + speel-4k): Replicate RIFE for 2x frame interpolation.
+  if ((level === "speel" || level === "speel-4k") && process.env.REPLICATE_API_TOKEN) {
     try {
       const interped = await runRife(workingUrl);
       if (interped) {
@@ -54,6 +61,20 @@ export async function applyRealism(
     } catch (e) {
       console.warn("[postprocess] RIFE failed, continuing with ffmpeg only:", errMsg(e));
       trace.error = `rife: ${errMsg(e)}`;
+    }
+  }
+
+  // Step 1b (speel-4k only): Real-ESRGAN video upscale to 4K.
+  if (level === "speel-4k" && process.env.REPLICATE_API_TOKEN) {
+    try {
+      const upscaled = await runUpscale(workingUrl);
+      if (upscaled) {
+        workingUrl = upscaled;
+        trace.upscaleApplied = true;
+      }
+    } catch (e) {
+      console.warn("[postprocess] upscale failed, keeping pre-upscale url:", errMsg(e));
+      trace.error = (trace.error ? trace.error + "; " : "") + `upscale: ${errMsg(e)}`;
     }
   }
 
@@ -83,6 +104,16 @@ async function runRife(videoUrl: string): Promise<string | null> {
   // the caller catches.
   const output = await replicate.run(RIFE_MODEL as `${string}/${string}`, {
     input: { video: videoUrl, fps: 48 },
+  });
+  return pickReplicateUrl(output);
+}
+
+async function runUpscale(videoUrl: string): Promise<string | null> {
+  const replicate = new Replicate({ auth: process.env.REPLICATE_API_TOKEN });
+  // lucataco/real-esrgan-video expects `video` and `scale`. 2x on a 1080p
+  // source lands at ~4K. Output is mp4.
+  const output = await replicate.run(UPSCALE_MODEL as `${string}/${string}`, {
+    input: { video: videoUrl, scale: 2 },
   });
   return pickReplicateUrl(output);
 }

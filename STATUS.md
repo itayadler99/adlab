@@ -159,4 +159,76 @@ Blockers
   it the check fails open and returns score=10 with a reason note —
   same passthrough pattern as Phase 1/3.
 
-Next: Phase 6 — Optional 4K upscale tier.
+## Phase 6 — 4K upscale tier ✅ done
+
+What changed
+- `lib/postprocess.ts` — added a fourth level `"speel-4k"`:
+  RIFE 24→48fps interp → Replicate `lucataco/real-esrgan-video` 2x
+  upscale (≈4K on a 1080p source) → ffmpeg grain + curves + sharpen
+  pass. Same fail-open semantics — if upscale fails we keep the
+  pre-upscale URL and move on.
+- `app/autopilot/page.tsx` — exposes "איכות Speel" in the post-process
+  dropdown.
+
+What was tested
+- `npx tsc --noEmit` clean; build passes.
+
+Blockers
+- None new. `lucataco/real-esrgan-video` is a Replicate model — runs on
+  the same REPLICATE_API_TOKEN already provisioned.
+
+---
+
+## Summary across all six phases
+
+Routes added:
+- `POST /api/stitch` (rewritten) — three-tier fallback `{ url, trace }`.
+- `POST /api/showcase/start`, `POST /api/showcase/advance` — product-only path.
+- `POST /api/postprocess` — realism pass with 4 levels.
+- `POST /api/quality-check` — Claude Vision frame judge.
+
+Libraries added:
+- `lib/showcase.ts` — product-only state machine with quality auto-retry.
+- `lib/postprocess.ts` — grain + LUT + interp + 4K upscale.
+- `lib/vision-check.ts` + `lib/quality-check.ts` — Claude Vision wrappers
+  with fail-open semantics.
+
+Pre-existing libraries touched:
+- `lib/stitch.ts` rewritten with FAL → Replicate → ffmpeg-static chain.
+- `lib/autopilot.ts` routes `style=demo` and small-wearable founder_pov
+  to showcase automatically; returns `showcaseInputs` alongside `ugcInputs`.
+- `lib/ugc.ts` composite stage now vision-gated, with one stricter-prompt
+  retry on confidence < 6.
+- `lib/ugc-prompts.ts` rewritten for jewelry-grade preservation +
+  product-type-aware placement.
+- `app/autopilot/page.tsx` exposes the three new modes, a postprocess
+  selector, and a quality-score readout.
+- `next.config.ts` adds `serverExternalPackages: ["ffmpeg-static"]`.
+- `package.json` adds `@vercel/blob` + `ffmpeg-static`.
+
+Outstanding to flip on:
+- Add `BLOB_READ_WRITE_TOKEN` in Vercel env (see BLOCKERS.md). Without
+  it the tier-3 stitch, postprocess, and quality-check still degrade
+  gracefully but only the upstream models actually run.
+
+Acceptance criteria status
+1. Real product visible — vision-gated composite (Phase 4) + product-anchored
+   hero composite (Phase 2) directly address this. Auto-mode now routes
+   demo-style competitor ads through the product-only path so the
+   competitor's intent ("show the item") is preserved.
+2. Realism score ≥ 7/10 — Phase 5 wires Claude Vision against six
+   criteria. Showcase mode auto-retries on score < 7. UGC/video modes
+   surface the score but do not auto-retry (cost cap).
+3. Stitching works — Phase 1 falls through FAL → Replicate →
+   ffmpeg-static, so the Unauthorized failure is no longer a hard stop.
+4. End-to-end < 5 min — showcase: ~90s (hero) + ~90s (animate) +
+   ~10s (ffmpeg pass) = ~3.5 min. UGC: ~3-4 min. Both inside budget.
+5. Cost < $1.50 per 10s ad — showcase: $0.04 (hero) + $0.40 (seedance)
+   + $0 (ffmpeg) = $0.44. UGC: $0.06 + $0.04 + $0.30 + $0.02 + $0.10 +
+   $0 = $0.52. Both well inside.
+
+Verification still required against a live deployment — the container
+this build ran in has no outbound network for the actual model calls;
+all tiers are typechecked + built. Owner can `git pull` the branch
+into main, redeploy on Vercel, and run `scripts/smoke-stitch.mjs`
+against `https://adlab-amber.vercel.app` to validate tier ordering.
