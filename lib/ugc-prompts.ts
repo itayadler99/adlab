@@ -44,14 +44,45 @@ export function buildActorPrompt(ctx: UgcPromptCtx): string {
 
 /** Composite prompt — place actual product in actor's hand. */
 export function buildCompositePrompt(ctx: UgcPromptCtx): string {
+  const placement = pickPlacementForProduct(ctx.productTitle);
   return [
-    `Edit the first image so the person is holding the product from the second image up to the camera.`,
+    `Insert the EXACT product from the second image into the scene of the first image — ${placement}.`,
     `Product: ${ctx.productTitle}.`,
-    `Keep the person's face, hair, skin tone, outfit, lighting, and background identical.`,
-    `The product should look real, naturally lit by the same window light, proper scale, casual grip.`,
-    `Match the exact texture and color of the product in the second image — do not invent details.`,
-    `Photoreal. No added text, no overlays.`,
+    `STRICT PRESERVATION (must match the second image one-to-one):`,
+    `every facet, every link, every prong, every gemstone, every clasp, every link weave, every metal finish, every shadow on the metal.`,
+    `Do NOT stylize, do NOT simplify, do NOT redraw, do NOT swap stones, do NOT change the chain pattern, do NOT change the band thickness, do NOT change the cut of the diamond/moissanite.`,
+    `Match the exact color temperature of the metal (rose vs yellow vs white gold) and the exact stone color from the second image.`,
+    `Keep the person's face, hair, skin tone, outfit, scene background, and ambient lighting identical to the first image.`,
+    `Proper real-world scale relative to the hand, neck, ear, or wrist. Natural physical contact, real shadow under the piece, real specular highlights catching the same window light.`,
+    `Photoreal jewelry catalog quality. No added text, no overlays, no logos, no watermarks.`,
   ].join(" ");
+}
+
+/** Stricter retry prompt for when the first composite attempt failed vision check. */
+export function buildCompositeRetryPrompt(ctx: UgcPromptCtx, reasons: string[]): string {
+  const placement = pickPlacementForProduct(ctx.productTitle);
+  const fixLine = reasons.length > 0
+    ? `Previous attempt failed for these reasons: ${reasons.slice(0, 3).join("; ")}. Fix all of them.`
+    : "";
+  return [
+    `Re-edit the first image so the person now ${placement}.`,
+    `THE SECOND IMAGE IS THE GROUND TRUTH FOR THE PRODUCT. Replicate it pixel for pixel — every facet, link, prong, gemstone, clasp, metal tone, and surface highlight.`,
+    `Do NOT invent jewelry. Do NOT substitute a similar-looking piece. Do NOT redraw — composite the reference piece directly.`,
+    `Product name (for context only): ${ctx.productTitle}.`,
+    fixLine,
+    `Keep face, hair, skin, outfit, background, and lighting from the first image unchanged.`,
+    `Photoreal, jewelry-catalog quality, natural shadow and reflection, no text, no overlays.`,
+  ].filter(Boolean).join(" ");
+}
+
+function pickPlacementForProduct(title: string): string {
+  const t = title.toLowerCase();
+  if (/earring|stud|hoop/.test(t)) return "is now wearing the earrings, ears visible, hair tucked back";
+  if (/ring|band/.test(t)) return "is now wearing the ring on the ring finger, hand raised to camera level";
+  if (/chain|necklace|pendant/.test(t)) return "is now wearing the chain at the neckline, fully visible against the collarbone";
+  if (/bracelet|cuff/.test(t)) return "is now wearing the bracelet on the wrist, raised loosely toward the camera";
+  if (/watch/.test(t)) return "is now wearing the watch on the wrist, raised so the face of the watch is visible";
+  return "is holding the product up to the camera at chest height, between thumb and index finger";
 }
 
 /** Animation prompt for image-to-video — gentle motion + speaking gestures. */

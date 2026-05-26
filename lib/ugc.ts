@@ -5,12 +5,17 @@ import * as falLib from "./fal";
 import {
   buildActorPrompt,
   buildCompositePrompt,
+  buildCompositeRetryPrompt,
   buildAnimationPrompt,
   pickVoiceId,
   normalizeArchetype,
   type UgcPromptCtx,
   type VoiceArchetype,
 } from "./ugc-prompts";
+import { checkCompositePreservesProduct } from "./vision-check";
+
+const COMPOSITE_VISION_THRESHOLD = 6; // confidence below this triggers a retry
+const COMPOSITE_MAX_ATTEMPTS = 2;     // first attempt + 1 retry
 
 // FAL endpoints used by each stage
 export const FAL = {
@@ -52,6 +57,13 @@ export interface UgcArtifacts {
   finalVideoUrl?: string;
 }
 
+export interface CompositeAttemptLog {
+  url?: string;
+  match: boolean;
+  confidence: number;
+  reasons: string[];
+}
+
 export interface UgcState {
   stage: UgcStage;
   inputs: UgcInputs;
@@ -60,6 +72,10 @@ export interface UgcState {
   error?: string;
   startedAt: number;
   updatedAt: number;
+  /** How many composite attempts we have submitted (initial + retries). */
+  compositeAttempts?: number;
+  /** Per-attempt vision-check outcomes — surfaced to the UI for transparency. */
+  compositeAttemptLog?: CompositeAttemptLog[];
 }
 
 const STAGE_ORDER: UgcStage[] = ["actor", "composite", "animate", "tts", "lipsync", "done"];
@@ -114,9 +130,42 @@ export async function advanceUgc(state: UgcState): Promise<UgcState> {
     case "actor":
       state.artifacts.actorImageUrl = job.imageUrl;
       break;
-    case "composite":
-      state.artifacts.compositeImageUrl = job.imageUrl;
+    case "composite": {
+      // Vision-gate: confirm the composite still contains the real product.
+      // If confidence is too low and we haven't exhausted retries, re-submit
+      // the composite with the stricter prompt.
+      const candidateUrl = job.imageUrl;
+      const check = candidateUrl
+        ? await checkCompositePreservesProduct(candidateUrl, state.inputs.productImageUrl)
+        : { match: true, confidence: 10, reasons: [] };
+      state.compositeAttemptLog = [
+        ...(state.compositeAttemptLog || []),
+        { url: candidateUrl, match: check.match, confidence: check.confidence, reasons: check.reasons },
+      ];
+      const attempts = state.compositeAttempts ?? 1;
+      const passed = check.match && check.confidence >= COMPOSITE_VISION_THRESHOLD;
+      if (!passed && attempts < COMPOSITE_MAX_ATTEMPTS) {
+        console.warn(
+          `[ugc] composite attempt ${attempts} failed vision check (confidence=${check.confidence}, reasons=${(check.reasons || []).join("|")}); retrying with stricter prompt`
+        );
+        // Stay on composite stage, resubmit with retry prompt.
+        state.compositeAttempts = attempts + 1;
+        state.pending = undefined;
+        try {
+          await submitStage(state, { compositeRetryReasons: check.reasons });
+          state.updatedAt = Date.now();
+          return state;
+        } catch (e) {
+          state.stage = "failed";
+          state.error = e instanceof Error ? e.message : String(e);
+          state.updatedAt = Date.now();
+          return state;
+        }
+      }
+      // Accept this composite (either passed, or out of retries — best effort).
+      state.artifacts.compositeImageUrl = candidateUrl;
       break;
+    }
     case "animate":
       state.artifacts.rawVideoUrl = job.videoUrl;
       break;
@@ -146,7 +195,10 @@ export async function advanceUgc(state: UgcState): Promise<UgcState> {
 }
 
 /** Submit the FAL job for the current stage and stash request_id in state.pending. */
-async function submitStage(state: UgcState): Promise<void> {
+async function submitStage(
+  state: UgcState,
+  opts: { compositeRetryReasons?: string[] } = {}
+): Promise<void> {
   const archetype: VoiceArchetype = normalizeArchetype(state.inputs.voiceArchetype);
   const ctx: UgcPromptCtx = {
     productTitle: state.inputs.productTitle,
@@ -177,8 +229,15 @@ async function submitStage(state: UgcState): Promise<void> {
     case "composite": {
       if (!state.artifacts.actorImageUrl) throw new Error("composite stage: missing actorImageUrl");
       endpoint = FAL.composite;
+      // On the first submission, compositeAttempts is undefined → seed to 1.
+      // The advance loop bumps it to 2 before resubmitting on retry.
+      if (state.compositeAttempts === undefined) state.compositeAttempts = 1;
+      const isRetry = (state.compositeAttempts ?? 1) > 1;
+      const prompt = isRetry
+        ? buildCompositeRetryPrompt(ctx, opts.compositeRetryReasons || [])
+        : buildCompositePrompt(ctx);
       input = {
-        prompt: buildCompositePrompt(ctx),
+        prompt,
         image_urls: [state.artifacts.actorImageUrl, state.inputs.productImageUrl],
         num_images: 1,
         output_format: "jpeg",

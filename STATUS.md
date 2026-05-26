@@ -98,5 +98,32 @@ Blockers
 - Same `BLOB_READ_WRITE_TOKEN` requirement as Phase 1. Without it the
   ffmpeg pass falls through and we serve the source URL.
 
-Next: Phase 4 — UGC composite quality (jewelry-grade prompts +
-vision-check fallback).
+## Phase 4 — UGC composite quality ✅ done
+
+What changed
+- `lib/ugc-prompts.ts`:
+  - `buildCompositePrompt()` rewritten with explicit jewelry-preservation
+    language (every facet, link, prong, gemstone, clasp; metal-tone
+    matching; no stylization).
+  - New `buildCompositeRetryPrompt(ctx, reasons)` for the retry attempt.
+  - New `pickPlacementForProduct(title)` so the prompt naturally fits the
+    product type (ring on finger, chain at neckline, earrings on ears,
+    etc.) instead of always "holding it up".
+- `lib/vision-check.ts` — Claude Vision wrappers. Today it ships
+  `checkCompositePreservesProduct()` (used here) and
+  `rateVideoRealism()` (used by Phase 5). Both fail open so the
+  pipeline never hangs on a vision call.
+- `lib/ugc.ts`:
+  - Composite stage now vision-checks the result against the original
+    Shopify product image. Confidence < 6 triggers a stricter-prompt
+    retry. Capped at 2 total attempts to bound cost.
+  - State carries `compositeAttempts` + `compositeAttemptLog` for UI
+    transparency.
+
+What was tested
+- `npx tsc --noEmit` clean.
+
+Blockers
+- None.
+
+Next: Phase 5 — Vision-based quality reject loop on the final video.
