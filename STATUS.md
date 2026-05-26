@@ -126,4 +126,37 @@ What was tested
 Blockers
 - None.
 
-Next: Phase 5 — Vision-based quality reject loop on the final video.
+## Phase 5 — Quality reject loop ✅ done
+
+What changed
+- `lib/quality-check.ts` (new canonical surface):
+  - `checkVideoQuality({ videoUrl, productImageUrl, script, threshold,
+    attempt, maxAttempts })`. Extracts a frame at ~2s with ffmpeg-static,
+    uploads it to Vercel Blob, then scores it via `rateVideoRealism()`
+    from `lib/vision-check.ts`. Returns `{ score, reasons, retry,
+    details, attempt, maxAttempts, threshold, frameUrl }`.
+  - Six-criterion judge: skin_material_realism, motion_naturalness,
+    framing, lighting, no_ai_tells, product_match. Overall score = min
+    of the six so the worst criterion drives the verdict.
+- `app/api/quality-check/route.ts` — POST endpoint.
+- `lib/showcase.ts` — when the animate stage produces a video, the state
+  machine now runs `checkVideoQuality`. If score < 7 and attempt < 2,
+  it switches to the other animate model (seedance ⇄ kling), clears the
+  video artifact, and re-submits. `qualityScore`, `qualityReasons`, and
+  `qualityAttempt` are surfaced on state.
+- `app/autopilot/page.tsx` — surfaces the showcase quality score under
+  the pipeline progress card (green ≥7, amber <7) with top 2 reasons.
+- UGC auto-retry intentionally skipped: the Phase 4 composite vision
+  check already burns the per-run retry budget, and re-running animate
+  for UGC also requires regenerating tts + lipsync (expensive). The
+  endpoint can still be called manually from the UI to inspect the score.
+
+What was tested
+- `npx tsc --noEmit` clean; `/api/quality-check` registered in build.
+
+Blockers
+- Needs `BLOB_READ_WRITE_TOKEN` to host the extracted frame. Without
+  it the check fails open and returns score=10 with a reason note —
+  same passthrough pattern as Phase 1/3.
+
+Next: Phase 6 — Optional 4K upscale tier.

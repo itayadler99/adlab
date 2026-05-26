@@ -9,10 +9,14 @@
 // /api/showcase/advance. Same shape as the UGC pipeline.
 import Replicate from "replicate";
 import * as falLib from "./fal";
+import { checkVideoQuality } from "./quality-check";
 
 export const FAL_HERO_ENDPOINT = "fal-ai/nano-banana/edit";
 
 export type ShowcaseStage = "hero" | "animate" | "done" | "failed";
+
+const QUALITY_THRESHOLD = 7;
+const QUALITY_MAX_ATTEMPTS = 2;
 
 export interface ShowcaseInputs {
   productTitle: string;
@@ -43,6 +47,11 @@ export interface ShowcaseState {
   error?: string;
   /** Which animate model produced the current attempt — useful for fallback. */
   animateModel?: "seedance-1-pro" | "kling-2.1";
+  /** Number of full animate attempts (initial + quality-driven retries). */
+  qualityAttempt?: number;
+  /** Last vision-judge result, surfaced to the UI. */
+  qualityScore?: number;
+  qualityReasons?: string[];
   startedAt: number;
   updatedAt: number;
 }
@@ -58,6 +67,7 @@ export async function startShowcase(inputs: ShowcaseInputs): Promise<ShowcaseSta
     stage: "hero",
     inputs,
     artifacts: {},
+    qualityAttempt: 1,
     startedAt: now,
     updatedAt: now,
   };
@@ -136,6 +146,36 @@ export async function advanceShowcase(state: ShowcaseState): Promise<ShowcaseSta
     state.artifacts.videoUrl = videoUrl;
     state.pending = undefined;
     state.stage = "done";
+
+    // Quality gate. Run Claude Vision on a frame of this video; if score is
+    // below threshold AND we have a retry left, switch to the alternate
+    // animate model and re-submit. Capped at QUALITY_MAX_ATTEMPTS total.
+    const attempt = state.qualityAttempt ?? 1;
+    try {
+      const qc = await checkVideoQuality({
+        videoUrl,
+        productImageUrl: state.inputs.productImageUrl,
+        threshold: QUALITY_THRESHOLD,
+        attempt,
+        maxAttempts: QUALITY_MAX_ATTEMPTS,
+      });
+      state.qualityScore = qc.score;
+      state.qualityReasons = qc.reasons;
+      if (qc.retry) {
+        const nextModel =
+          state.animateModel === "seedance-1-pro" ? "kling-2.1" : "seedance-1-pro";
+        console.warn(
+          `[showcase] quality score ${qc.score} < ${QUALITY_THRESHOLD} on attempt ${attempt}; re-animating with ${nextModel}`
+        );
+        state.qualityAttempt = attempt + 1;
+        state.artifacts.videoUrl = undefined;
+        state.stage = "animate";
+        state.pending = undefined;
+        await submitAnimate(state, nextModel);
+      }
+    } catch (e) {
+      console.warn("[showcase] quality check errored, accepting current video:", e instanceof Error ? e.message : e);
+    }
     state.updatedAt = Date.now();
     return state;
   } catch (e) {

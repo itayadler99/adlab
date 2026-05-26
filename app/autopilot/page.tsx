@@ -61,6 +61,9 @@ interface ShowcaseState {
   pending?: { provider: "fal" | "replicate"; endpoint: string; jobId: string };
   error?: string;
   animateModel?: "seedance-1-pro" | "kling-2.1";
+  qualityAttempt?: number;
+  qualityScore?: number;
+  qualityReasons?: string[];
   startedAt: number;
   updatedAt: number;
 }
@@ -814,6 +817,17 @@ export default function AutopilotPage() {
                           : `${SHOWCASE_STAGE_LABEL[showcaseState.stage]}...`
                       : "מאתחל..."}
                   </div>
+                  {showcaseState?.qualityScore !== undefined && (
+                    <div className={`text-xs text-center ${showcaseState.qualityScore >= 7 ? "text-emerald-300" : "text-amber-300"}`}>
+                      איכות סרטון (Claude Vision): {showcaseState.qualityScore}/10
+                      {showcaseState.qualityAttempt && showcaseState.qualityAttempt > 1
+                        ? ` (ניסיון ${showcaseState.qualityAttempt})`
+                        : ""}
+                      {showcaseState.qualityReasons && showcaseState.qualityReasons.length > 0 && (
+                        <div className="text-white/40 mt-1">{showcaseState.qualityReasons.slice(0, 2).join(" · ")}</div>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <div className="space-y-1">
