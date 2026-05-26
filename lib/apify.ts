@@ -25,6 +25,8 @@ export interface ApifyAd {
 }
 
 export interface ApifyRunInput {
+  startUrls?: { url: string }[];
+  // legacy/convenience — will be converted to startUrls
   adArchiveId?: string;
   searchPageIDs?: string[];
   searchTerms?: string[];
@@ -34,6 +36,27 @@ export interface ApifyRunInput {
   startDate?: string;
   endDate?: string;
   maxResults?: number;
+}
+
+function buildAdLibraryUrl(opts: { pageId?: string; term?: string; country?: string }): string {
+  const country = opts.country || "US";
+  const base = `https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=${country}`;
+  if (opts.pageId) return `${base}&view_all_page_id=${encodeURIComponent(opts.pageId)}`;
+  if (opts.term) return `${base}&q=${encodeURIComponent(opts.term)}`;
+  return base;
+}
+
+function toStartUrls(input: ApifyRunInput): { url: string }[] {
+  if (input.startUrls && input.startUrls.length) return input.startUrls;
+  const urls: { url: string }[] = [];
+  const country = input.country;
+  if (input.searchPageIDs) {
+    for (const pid of input.searchPageIDs) urls.push({ url: buildAdLibraryUrl({ pageId: pid, country }) });
+  }
+  if (input.searchTerms) {
+    for (const term of input.searchTerms) urls.push({ url: buildAdLibraryUrl({ term, country }) });
+  }
+  return urls;
 }
 
 interface ApifyRunResponse {
@@ -54,11 +77,15 @@ async function apifyFetch<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export async function startScrape(input: ApifyRunInput): Promise<string> {
-  const body: ApifyRunInput & { maxResults: number } = {
-    adType: "ALL",
-    country: "US",
-    maxResults: 20,
-    ...input,
+  const startUrls = toStartUrls(input);
+  if (!startUrls.length) {
+    throw new Error("Apify input requires startUrls or searchPageIDs/searchTerms");
+  }
+  const body = {
+    startUrls,
+    maxResults: input.maxResults ?? 20,
+    activeStatus: "all",
+    country: input.country || "US",
   };
   const run = await apifyFetch<ApifyRunResponse>(`/acts/${encodeURIComponent(ACTOR_ID)}/runs`, {
     method: "POST",
