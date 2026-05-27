@@ -232,3 +232,23 @@ this build ran in has no outbound network for the actual model calls;
 all tiers are typechecked + built. Owner can `git pull` the branch
 into main, redeploy on Vercel, and run `scripts/smoke-stitch.mjs`
 against `https://adlab-amber.vercel.app` to validate tier ordering.
+
+## Phase 7 — Final realism gap closure
+
+### Item 1 — Route text-bearing images through nano-banana ✅ done
+
+What changed
+- `lib/images.ts`: text-bearing sales images now route through
+  `fal-ai/nano-banana/edit` (when a real product image is available) or
+  `fal-ai/nano-banana` (otherwise), with a `recraft/v3 → flux-pro/v1.1-ultra
+  → Replicate ideogram` fallback chain. Each prompt carries an explicit
+  "Render text EXACTLY as: '...'" anchor for headline, bullets, and brand.
+- `lib/images.ts`: `ImageJob.id` is now provider-tagged
+  (`fal:<endpoint>:<requestId>` vs plain Replicate id) so the existing
+  `/api/poll?kind=image` route dispatches to the right provider with no
+  schema change on the client.
+- `lib/autopilot.ts`: passes `productImageUrl` + `hasText: true` into
+  `startSalesImages`.
+
+What was tested
+- `npx tsc --noEmit` clean; `npm run build` passes.
