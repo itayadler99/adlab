@@ -32,17 +32,48 @@ interface AutopilotResult {
   cta: string;
   headlines: string[];
   bodyCopy: string;
-  mode: "video" | "ugc";
+  mode: "video" | "ugc" | "showcase";
   videoJobId?: string;
   videoJobIds?: string[];
   videoClipSeconds?: number;
   videoTotalSeconds?: number;
   videoModel?: string;
   ugcInputs?: UgcInputsClient;
+  showcaseInputs?: ShowcaseInputsClient;
   imageJobIds?: string[];
   thumbnailUrl?: string;
   dailyBudget: number;
 }
+
+interface ShowcaseInputsClient {
+  productTitle: string;
+  productImageUrl: string;
+  hook: string;
+  scene?: string;
+  durationSec?: number;
+}
+
+type ShowcaseStage = "hero" | "animate" | "done" | "failed";
+interface ShowcaseState {
+  stage: ShowcaseStage;
+  inputs: ShowcaseInputsClient;
+  artifacts: { heroImageUrl?: string; videoUrl?: string };
+  pending?: { provider: "fal" | "replicate"; endpoint: string; jobId: string };
+  error?: string;
+  animateModel?: "seedance-1-pro" | "kling-2.1";
+  qualityAttempt?: number;
+  qualityScore?: number;
+  qualityReasons?: string[];
+  startedAt: number;
+  updatedAt: number;
+}
+
+const SHOWCASE_STAGE_LABEL: Record<ShowcaseStage, string> = {
+  hero: "יוצר תמונת מוצר מסוגננת",
+  animate: "מחיה את המוצר לסרטון",
+  done: "הסרטון מוכן",
+  failed: "נכשל",
+};
 
 type UgcStage = "actor" | "composite" | "animate" | "tts" | "lipsync" | "done" | "failed";
 interface UgcState {
@@ -100,7 +131,8 @@ export default function AutopilotPage() {
   const [dailyBudget, setDailyBudget] = useState(100);
   const [videoModel, setVideoModel] = useState<VideoModelChoice>("veo-3.1-fast");
   const [videoDuration, setVideoDuration] = useState(0); // 0 = auto-detect from competitor
-  const [adMode, setAdMode] = useState<"auto" | "video" | "ugc">("auto");
+  const [adMode, setAdMode] = useState<"auto" | "video" | "ugc" | "showcase">("auto");
+  const [postProcess, setPostProcess] = useState<"off" | "fast" | "speel" | "speel-4k">("fast");
   const [language, setLanguage] = useState<"en" | "he">("en");
   const [stage, setStage] = useState<Stage>("idle");
   const [error, setError] = useState("");
@@ -115,13 +147,25 @@ export default function AutopilotPage() {
   const [stitching, setStitching] = useState(false);
   const [stitchError, setStitchError] = useState("");
   const stitchTriggeredRef = useRef(false);
+  const [enhancedUrl, setEnhancedUrl] = useState<string | null>(null);
+  const [enhancing, setEnhancing] = useState(false);
+  const [enhanceError, setEnhanceError] = useState("");
+  const enhanceTriggeredRef = useRef(false);
   const pollersRef = useRef<number[]>([]);
   // UGC mode state
   const [ugcState, setUgcState] = useState<UgcState | null>(null);
   const ugcTickRef = useRef<number | null>(null);
   const ugcAdvanceInFlightRef = useRef(false);
   const finalUgcUrl = ugcState?.artifacts.finalVideoUrl || null;
-  const videoUrl = finalUgcUrl || stitchedUrl || videoUrls[0] || null;
+  // Showcase mode state
+  const [showcaseState, setShowcaseState] = useState<ShowcaseState | null>(null);
+  const showcaseTickRef = useRef<number | null>(null);
+  const showcaseAdvanceInFlightRef = useRef(false);
+  const finalShowcaseUrl = showcaseState?.artifacts.videoUrl || null;
+  // "Source" video — first cut from whichever pipeline produced it.
+  const sourceVideoUrl = finalShowcaseUrl || finalUgcUrl || stitchedUrl || videoUrls[0] || null;
+  // Preferred for player + launch — enhanced if postprocess succeeded, else source.
+  const videoUrl = enhancedUrl || sourceVideoUrl;
 
   function clearAllPollers() {
     for (const id of pollersRef.current) window.clearInterval(id);
@@ -135,10 +179,18 @@ export default function AutopilotPage() {
     }
   }
 
+  function clearShowcaseTick() {
+    if (showcaseTickRef.current !== null) {
+      window.clearInterval(showcaseTickRef.current);
+      showcaseTickRef.current = null;
+    }
+  }
+
   useEffect(() => {
     return () => {
       clearAllPollers();
       clearUgcTick();
+      clearShowcaseTick();
     };
   }, []);
 
@@ -162,6 +214,66 @@ export default function AutopilotPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "UGC start network error");
       setStage("error");
+    }
+  }
+
+  async function startShowcasePipeline(inputs: ShowcaseInputsClient) {
+    try {
+      const res = await fetch("/api/showcase/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(inputs),
+      });
+      const data = (await res.json()) as ShowcaseState & { error?: string };
+      if (!res.ok || data.error) {
+        setError(`Showcase start failed: ${data.error || res.status}`);
+        setStage("error");
+        return;
+      }
+      setShowcaseState(data);
+      clearShowcaseTick();
+      showcaseTickRef.current = window.setInterval(() => advanceShowcaseOnce(), 5000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Showcase start network error");
+      setStage("error");
+    }
+  }
+
+  async function advanceShowcaseOnce() {
+    if (showcaseAdvanceInFlightRef.current) return;
+    let snapshot: ShowcaseState | null = null;
+    setShowcaseState((prev) => {
+      snapshot = prev;
+      return prev;
+    });
+    if (!snapshot) return;
+    const cur: ShowcaseState = snapshot;
+    if (cur.stage === "done" || cur.stage === "failed") {
+      clearShowcaseTick();
+      return;
+    }
+    showcaseAdvanceInFlightRef.current = true;
+    try {
+      const res = await fetch("/api/showcase/advance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(cur),
+      });
+      const data = (await res.json()) as ShowcaseState & { error?: string };
+      if (!res.ok || data.error) {
+        setError(`Showcase advance failed: ${data.error || res.status}`);
+        setStage("error");
+        clearShowcaseTick();
+        return;
+      }
+      setShowcaseState(data);
+      if (data.stage === "done" || data.stage === "failed") {
+        clearShowcaseTick();
+      }
+    } catch (e) {
+      console.warn("showcase advance tick error:", e);
+    } finally {
+      showcaseAdvanceInFlightRef.current = false;
     }
   }
 
@@ -323,6 +435,38 @@ export default function AutopilotPage() {
     })();
   }, [videoUrls, result]);
 
+  // Auto-postprocess once the pipeline produces a source video. Runs at most
+  // once per autopilot run; failures fall back to the source url silently.
+  useEffect(() => {
+    if (postProcess === "off") return;
+    if (enhanceTriggeredRef.current) return;
+    if (!sourceVideoUrl) return;
+    // If multi-clip, wait for the stitched url; otherwise process the single clip.
+    if (videoUrls.length > 1 && !stitchedUrl) return;
+    enhanceTriggeredRef.current = true;
+    setEnhancing(true);
+    setEnhanceError("");
+    (async () => {
+      try {
+        const res = await fetch("/api/postprocess", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: sourceVideoUrl, level: postProcess }),
+        });
+        const data = (await res.json()) as { url?: string; error?: string };
+        if (!res.ok || data.error || !data.url) {
+          setEnhanceError(data.error || "postprocess failed");
+        } else {
+          setEnhancedUrl(data.url);
+        }
+      } catch (e) {
+        setEnhanceError(e instanceof Error ? e.message : "postprocess network error");
+      } finally {
+        setEnhancing(false);
+      }
+    })();
+  }, [sourceVideoUrl, stitchedUrl, videoUrls.length, postProcess]);
+
   async function runAutopilot() {
     if (!competitorInput.trim()) {
       setError("הכנס כתובת מתחרה או שם מותג");
@@ -336,7 +480,13 @@ export default function AutopilotPage() {
     setStitchError("");
     setLaunchInfo(null);
     setUgcState(null);
+    setShowcaseState(null);
+    setEnhancedUrl(null);
+    setEnhancing(false);
+    setEnhanceError("");
+    enhanceTriggeredRef.current = false;
     clearUgcTick();
+    clearShowcaseTick();
     setStage("scanning");
 
     try {
@@ -360,6 +510,11 @@ export default function AutopilotPage() {
       if (data.mode === "ugc" && data.ugcInputs) {
         // Kick off UGC pipeline; sales images still poll in parallel.
         await startUgcPipeline(data.ugcInputs);
+        if (data.imageJobIds && data.imageJobIds.length > 0) {
+          startPollingAll([], data.imageJobIds);
+        }
+      } else if (data.mode === "showcase" && data.showcaseInputs) {
+        await startShowcasePipeline(data.showcaseInputs);
         if (data.imageJobIds && data.imageJobIds.length > 0) {
           startPollingAll([], data.imageJobIds);
         }
@@ -453,15 +608,16 @@ export default function AutopilotPage() {
               <label className="block text-sm font-medium text-white/80">סוג מודעה</label>
               <select
                 value={adMode}
-                onChange={(e) => setAdMode(e.target.value as "auto" | "video" | "ugc")}
+                onChange={(e) => setAdMode(e.target.value as "auto" | "video" | "ugc" | "showcase")}
                 className="w-full bg-black border border-white/15 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
               >
                 <option value="auto">אוטומטי (לפי המתחרה)</option>
+                <option value="showcase">תצוגת מוצר — תקריב יוקרתי של התכשיט בלבד</option>
                 <option value="ugc">UGC — דמות אמיתית מחזיקה את המוצר ומדברת</option>
                 <option value="video">סרטון רגיל (Veo / Kling / Sora)</option>
               </select>
               <p className="text-xs text-white/40">
-                UGC = שחקן AI עם פנים, מחזיק את המוצר שלך מהאתר, מדבר עם שפתיים בסנכרון. סרטון רגיל = סצנה גנרית.
+                תצוגת מוצר = רק התכשיט שלך, ללא שחקן, סטודיו יוקרתי. UGC = שחקן AI עם פנים, מחזיק את המוצר שלך, מדבר עם שפתיים בסנכרון. סרטון רגיל = סצנה גנרית.
               </p>
             </div>
             <div className="space-y-2">
@@ -510,6 +666,22 @@ export default function AutopilotPage() {
                 סרטון רציף, ללא חתכים נראים. אוטומטי = מדדים את אורך הסרטון של המתחרה ומתאימים. עד 15 שניות מיוצר כקליפ אחד אחיד; מעל זה חיבור חלק עם המשכיות ויזואלית מלאה.
               </p>
             </div>
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-white/80">שיפור ריאליזם (פוסט-פרודקשן)</label>
+              <select
+                value={postProcess}
+                onChange={(e) => setPostProcess(e.target.value as "off" | "fast" | "speel" | "speel-4k")}
+                className="w-full bg-black border border-white/15 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
+              >
+                <option value="fast">מהיר — גרעין סרט + תיקון צבע (מומלץ)</option>
+                <option value="speel">מקסימום — אינטרפולציה ל-48fps + גרעין + צבע</option>
+                <option value="speel-4k">איכות Speel — 48fps + שדרוג ל-4K + גרעין</option>
+                <option value="off">כבוי — סרטון גולמי בלי שיפור</option>
+              </select>
+              <p className="text-xs text-white/40">
+                מהיר: כ-10 שניות, חינם. מקסימום: כ-60 שניות, ~$0.05. איכות Speel: כ-3 דקות, ~$0.20, 4K משודרג.
+              </p>
+            </div>
             <button
               onClick={runAutopilot}
               className="w-full bg-violet-600 hover:bg-violet-500 text-white font-semibold py-3 rounded-lg transition-colors"
@@ -536,7 +708,15 @@ export default function AutopilotPage() {
           <div className="space-y-6">
             {/* Status banner */}
             <div className="bg-violet-950/40 border border-violet-500/30 rounded-xl p-4 text-sm text-violet-200">
-              {!videoUrl ? STAGE_LABEL.rendering : "הוידאו מוכן — בדוק ואשר"}
+              {!videoUrl
+                ? STAGE_LABEL.rendering
+                : enhancing
+                  ? "מוסיף גרעין סרט ותיקון צבע..."
+                  : enhanceError
+                    ? `שיפור ריאליזם נכשל (משתמש בסרטון הגולמי): ${enhanceError}`
+                    : enhancedUrl
+                      ? "הסרטון משופר ומוכן — בדוק ואשר"
+                      : "הוידאו מוכן — בדוק ואשר"}
             </div>
 
             {/* UGC pipeline progress */}
@@ -622,8 +802,58 @@ export default function AutopilotPage() {
               </section>
             )}
 
+            {/* Showcase pipeline progress */}
+            {result.mode === "showcase" && (
+              <section className="space-y-3">
+                <h2 className="text-xs font-semibold text-white/60 uppercase tracking-wider">
+                  צינור תצוגת מוצר
+                </h2>
+                <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
+                  <div className="text-sm text-white/70 text-center">
+                    {showcaseState
+                      ? showcaseState.stage === "done"
+                        ? "הסרטון מוכן."
+                        : showcaseState.stage === "failed"
+                          ? `נכשל: ${showcaseState.error || "שגיאה"}`
+                          : `${SHOWCASE_STAGE_LABEL[showcaseState.stage]}...`
+                      : "מאתחל..."}
+                  </div>
+                  {showcaseState?.qualityScore !== undefined && (
+                    <div className={`text-xs text-center ${showcaseState.qualityScore >= 7 ? "text-emerald-300" : "text-amber-300"}`}>
+                      איכות סרטון (Claude Vision): {showcaseState.qualityScore}/10
+                      {showcaseState.qualityAttempt && showcaseState.qualityAttempt > 1
+                        ? ` (ניסיון ${showcaseState.qualityAttempt})`
+                        : ""}
+                      {showcaseState.qualityReasons && showcaseState.qualityReasons.length > 0 && (
+                        <div className="text-white/40 mt-1">{showcaseState.qualityReasons.slice(0, 2).join(" · ")}</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <div className="text-[10px] text-white/40">תמונת מוצר (הרו)</div>
+                    {showcaseState?.artifacts.heroImageUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={showcaseState.artifacts.heroImageUrl} alt="hero" className="w-full aspect-[9/16] object-cover rounded-lg border border-white/10" />
+                    ) : (
+                      <div className="aspect-[9/16] bg-zinc-900 border border-white/10 rounded-lg" />
+                    )}
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-[10px] text-white/40">סרטון</div>
+                    {showcaseState?.artifacts.videoUrl ? (
+                      <video src={showcaseState.artifacts.videoUrl} controls className="w-full aspect-[9/16] object-cover rounded-lg border border-emerald-500/40 bg-zinc-900" />
+                    ) : (
+                      <div className="aspect-[9/16] bg-zinc-900 border border-white/10 rounded-lg" />
+                    )}
+                  </div>
+                </div>
+              </section>
+            )}
+
             {/* Video clips (mode = "video") */}
-            {result.mode !== "ugc" && (
+            {result.mode !== "ugc" && result.mode !== "showcase" && (
             <section className="space-y-2">
               <h2 className="text-xs font-semibold text-white/60 uppercase tracking-wider">
                 וידאו{videoUrls.length > 1 ? ` (${videoUrls.length} קליפים)` : ""}
