@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { applyRealism, burnCaptions, type PostProcessLevel, type CaptionStyle } from "@/lib/postprocess";
+import { applyRealism, burnCaptions, addMusicBed, type PostProcessLevel, type CaptionStyle } from "@/lib/postprocess";
 import { buildCaptionsForVideo } from "@/lib/captions";
 import { getBrandKit } from "@/lib/brand-kit";
+import { pickMusicTrack, pickVertical, type Vertical } from "@/lib/music";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -12,7 +13,7 @@ interface Body {
   storeId?: string;
   brandKit?: boolean;
   captions?: CaptionStyle;
-  music?: { vertical?: string };
+  music?: { enabled?: boolean; vertical?: Vertical; musicDb?: number };
   pipeline?: "legacy" | "v2026";
   goldenHour?: boolean;
   lighting?: "day" | "night";
@@ -61,11 +62,33 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Optional music bed (P5). Off by default. Run AFTER captions so the
+    // sidechain key is the final VO mix.
+    let workingUrl = captionUrl ?? result.url;
+    let musicApplied = false;
+    let musicError: string | undefined;
+    if (body.music?.enabled) {
+      try {
+        const vertical = body.music.vertical ?? pickVertical(body.storeId);
+        const track = await pickMusicTrack(vertical);
+        if (!track) {
+          musicError = `no music tracks installed under public/music/${vertical}/`;
+        } else {
+          workingUrl = await addMusicBed(workingUrl, track, { musicDb: body.music.musicDb });
+          musicApplied = true;
+        }
+      } catch (e) {
+        musicError = e instanceof Error ? e.message : String(e);
+      }
+    }
+
     return NextResponse.json({
       ...result,
-      url: captionUrl ?? result.url,
+      url: workingUrl,
       captionsApplied: Boolean(captionUrl),
       captionsError,
+      musicApplied,
+      musicError,
     });
   } catch (e) {
     return NextResponse.json(

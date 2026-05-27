@@ -302,6 +302,76 @@ async function runFfmpegRealism(videoUrl: string, opts: PostProcessOpts = {}): P
   }
 }
 
+// ---- Music bed sidechain ducked under VO ----------------------------------
+
+/**
+ * Mix a music bed under the video's existing audio with sidechain compression
+ * — the VO ducks the music whenever it speaks. Returns a new Blob URL.
+ *
+ * Filter graph:
+ *   [0:a] split into two: keep the VO (`voice`), and a copy to drive the
+ *   sidechain (`scin`). [1:a] is the music. The music goes through a
+ *   sidechaincompress keyed on `scin` (threshold=0.05, ratio=8 — 2026-correct
+ *   spec). Then amix the ducked music with the original VO. Music sits at
+ *   the requested volume (default -16dB).
+ */
+export async function addMusicBed(
+  videoUrl: string,
+  musicPath: string,
+  opts: { musicDb?: number } = {}
+): Promise<string> {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const ffmpegPath = require("ffmpeg-static") as string | null;
+  if (!ffmpegPath) throw new Error("ffmpeg-static binary not available");
+  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    throw new Error("BLOB_READ_WRITE_TOKEN required for addMusicBed");
+  }
+  const musicDb = opts.musicDb ?? -16;
+
+  const workDir = await mkdtemp(path.join(tmpdir(), "music-"));
+  try {
+    const res = await fetch(videoUrl);
+    if (!res.ok) throw new Error(`fetch ${videoUrl}: HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    const inPath = path.join(workDir, "in.mp4");
+    const outPath = path.join(workDir, "out.mp4");
+    await writeFile(inPath, buf);
+
+    const filter =
+      `[0:a]asplit=2[voice][scin];` +
+      `[1:a]volume=${musicDb}dB[bed];` +
+      `[bed][scin]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=300[duck];` +
+      `[voice][duck]amix=inputs=2:duration=first:dropout_transition=0[mix]`;
+
+    await runFfmpeg(ffmpegPath, [
+      "-y",
+      "-i", inPath,
+      "-stream_loop", "-1", "-i", musicPath, // loop music to cover full duration
+      "-shortest",
+      "-filter_complex", filter,
+      "-map", "0:v",
+      "-map", "[mix]",
+      "-c:v", "copy",
+      "-c:a", "aac", "-b:a", "192k",
+      "-movflags", "+faststart",
+      outPath,
+    ]);
+
+    const sz = (await stat(outPath)).size;
+    if (sz < 1024) throw new Error(`addMusicBed mp4 too small (${sz} bytes)`);
+    const mp4 = await readFile(outPath);
+    const { put } = await import("@vercel/blob");
+    const blob = await put(`music/${Date.now()}.mp4`, mp4, {
+      access: "public",
+      contentType: "video/mp4",
+      addRandomSuffix: true,
+    });
+    return blob.url;
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
 // ---- Caption burn-in (libass) ---------------------------------------------
 
 /**

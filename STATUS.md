@@ -323,3 +323,10 @@ What was tested
 - `lib/postprocess.ts` adds `burnCaptions(url, assPath)` — single ffmpeg pass with `-vf ass=…` (libass, NOT drawtext). Outputs to Vercel Blob.
 - `app/api/postprocess/route.ts` now accepts `captions: { enabled, position, highlightHex, fontFamily }` and runs the caption burn-in AFTER realism. Falls back to no captions on missing word timestamps (Whisper account quirk). Brand kit secondary hex + font family flow through automatically.
 - `npx tsc --noEmit` clean; `npm run build` passes.
+
+### P5 — Music bed library ✅
+- New: `lib/music.ts` — `pickVertical(storeId)` maps store→vertical, `pickMusicTrack(vertical)` scans `public/music/<vertical>/*.mp3` (random pick), falls through to `public/music/universal/` then null.
+- New: `public/music/{jewelry,sneakers,saas,studio,universal}/` directories with `.gitkeep` stubs (royalty-free tracks are owner-supplied; see BLOCKERS.md drop list).
+- `lib/postprocess.ts` adds `addMusicBed(url, musicPath, { musicDb })` — ffmpeg filter graph with `sidechaincompress=threshold=0.05:ratio=8:attack=20:release=300` keyed off the VO so music ducks under speech. Music loops to cover video length via `-stream_loop -1`.
+- `app/api/postprocess/route.ts` `music: { enabled, vertical, musicDb }` opt — vertical resolved from `storeId` when omitted; gracefully no-ops with an explanatory `musicError` if the directory is empty.
+- `npx tsc --noEmit` clean; `npm run build` passes.
