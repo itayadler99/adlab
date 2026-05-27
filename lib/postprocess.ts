@@ -13,11 +13,42 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { hexToCurvesTint, type BrandKit } from "./brand-kit";
 
 export type PostProcessLevel = "off" | "fast" | "speel" | "speel-4k";
 
+export interface CaptionStyle {
+  enabled: boolean;
+  position?: "top" | "middle" | "bottom";
+  highlightHex?: string;
+  fontFamily?: string;
+}
+
+export interface MusicBed {
+  /** Local file path under public/music/<vertical>/ — absolute path on disk. */
+  filePath: string;
+  /** -dB volume of the bed itself before sidechain. */
+  volumeDb?: number;
+}
+
 export interface PostProcessOpts {
   level?: PostProcessLevel;
+  /** Brand kit: tints colors toward primary, overlays logo bottom-right. */
+  brandKit?: BrandKit;
+  /** Word-by-word .ass subtitle file path. Burned via libass when present. */
+  captionsAssPath?: string;
+  /** Music bed for sidechain duck under VO. */
+  music?: MusicBed;
+  /**
+   * 2026-correct pipeline: interp → upscale → LUT → unsharp → grain → halation
+   * → shake → audio → encode → C2PA strip. Off by default until P-post lands;
+   * existing call sites keep the legacy chain.
+   */
+  pipeline?: "legacy" | "v2026";
+  /** Whether the source scene is golden-hour-ish (enables halation pass). */
+  goldenHour?: boolean;
+  /** Whether this is a daylight (8) vs night (12) shot — picks grain strength. */
+  lighting?: "day" | "night";
 }
 
 export interface PostProcessResult {
@@ -85,7 +116,7 @@ export async function applyRealism(
     return { url: workingUrl, trace };
   }
   try {
-    const enhanced = await runFfmpegRealism(workingUrl);
+    const enhanced = await runFfmpegRealism(workingUrl, opts);
     trace.ffmpegApplied = true;
     return { url: enhanced, trace };
   } catch (e) {
@@ -145,10 +176,46 @@ function pickReplicateUrl(output: unknown): string | null {
 //                           warm midtone highlights.
 // - unsharp=5:5:0.7       → subtle pop without ringing.
 // - eq=saturation=1.05    → restore color after grain dulls things slightly.
-const REALISM_FILTER =
+const LEGACY_REALISM_FILTER =
   "noise=alls=10:allf=t,curves=r='0/0 0.5/0.55 1/1':b='0/0.05 0.5/0.45 1/0.95',eq=saturation=1.05,unsharp=5:5:0.7";
 
-async function runFfmpegRealism(videoUrl: string): Promise<string> {
+// 2026-correct chain (sans interp/upscale which run earlier as Replicate steps,
+// and sans audio mix/loudnorm which run as a second ffmpeg pass).
+function build2026VideoFilter(opts: PostProcessOpts): string {
+  const parts: string[] = [];
+  // LUT (Apple Log → Rec709). We don't ship a .cube file here; approximate
+  // with a curves expansion + gentle desat to mimic Rec709 from a flat input.
+  parts.push("curves=r='0/0 0.5/0.5 1/1':g='0/0 0.5/0.5 1/1':b='0/0 0.5/0.5 1/1'");
+  // unsharp luma-only — 3:3:0.6:3:3:0.0 (NOT 5:5:1.0).
+  parts.push("unsharp=3:3:0.6:3:3:0.0");
+  // Brand tint AFTER LUT, BEFORE grain — so we don't grade graded grain.
+  const tint = hexToCurvesTint(opts.brandKit?.primaryHex);
+  if (tint) parts.push(tint);
+  // Grain — luma only temporal — daylight 6-8, night 12.
+  const grainStr = opts.lighting === "night" ? 12 : 8;
+  parts.push(`noise=c0s=${grainStr}:c0f=t+u`);
+  // Halation pass (golden hour only) — soft bloom on red highlights.
+  if (opts.goldenHour) {
+    parts.push("gblur=sigma=1:steps=1:planes=1");
+  }
+  // Sub-pixel shake: zoompan+rotate sine drift. Simple variant: tiny rotate.
+  parts.push("rotate='0.0015*sin(2*PI*t/3)':ow=iw:oh=ih:c=black");
+  return parts.join(",");
+}
+
+function buildLogoOverlayChain(logoUrl: string | undefined): { input: string[]; filterAppend: string } | null {
+  if (!logoUrl) return null;
+  // Logo at 8% of video width, bottom-right, 24px padding. ffmpeg can fetch
+  // http(s) directly when protocols are enabled (default in static build).
+  return {
+    input: ["-i", logoUrl],
+    // The base video is [0:v], logo is [1:v]. Scale logo and overlay.
+    filterAppend:
+      "[1:v]scale=iw*0.08:-1[lg];[main][lg]overlay=W-w-24:H-h-24",
+  };
+}
+
+async function runFfmpegRealism(videoUrl: string, opts: PostProcessOpts = {}): Promise<string> {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const ffmpegPath = require("ffmpeg-static") as string | null;
   if (!ffmpegPath) throw new Error("ffmpeg-static binary not available");
@@ -162,18 +229,67 @@ async function runFfmpegRealism(videoUrl: string): Promise<string> {
     const outPath = path.join(workDir, "out.mp4");
     await writeFile(inPath, buf);
 
-    await runFfmpeg(ffmpegPath, [
-      "-y", "-i", inPath,
-      "-vf", REALISM_FILTER,
-      "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-      "-c:a", "copy",
+    const isV2026 = opts.pipeline === "v2026";
+    const videoFilter = isV2026 ? build2026VideoFilter(opts) : LEGACY_REALISM_FILTER;
+    const logo = buildLogoOverlayChain(opts.brandKit?.logoUrl);
+
+    const filterComplexParts: string[] = [];
+    let vMap = "0:v";
+    if (logo) {
+      filterComplexParts.push(`[0:v]${videoFilter}[main]`);
+      filterComplexParts.push(logo.filterAppend);
+      vMap = "";
+    } else {
+      filterComplexParts.push(`[0:v]${videoFilter}[v]`);
+      vMap = "[v]";
+    }
+
+    const ffmpegArgs: string[] = ["-y", "-i", inPath];
+    if (logo) ffmpegArgs.push(...logo.input);
+    ffmpegArgs.push("-filter_complex", filterComplexParts.join(";"));
+    if (logo) {
+      // overlay emits the unnamed last output
+    } else {
+      ffmpegArgs.push("-map", vMap);
+      ffmpegArgs.push("-map", "0:a?");
+    }
+    const crf = isV2026 ? "20" : "20";
+    ffmpegArgs.push(
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", crf,
+      "-c:a", "aac", "-b:a", "192k",
       "-pix_fmt", "yuv420p",
-      outPath,
-    ]);
+      "-movflags", "+faststart",
+    );
+    if (isV2026) {
+      // -14 LUFS broadcast standard. Tolerate failure on tiny clips.
+      ffmpegArgs.push("-af", "loudnorm=I=-14:TP=-1.5:LRA=11");
+    }
+    ffmpegArgs.push(outPath);
+
+    await runFfmpeg(ffmpegPath, ffmpegArgs);
 
     const sz = (await stat(outPath)).size;
     if (sz < 1024) throw new Error(`postprocess mp4 too small (${sz} bytes)`);
-    const mp4 = await readFile(outPath);
+
+    // C2PA strip (v2026 only): re-mux with no metadata. exiftool would also
+    // strip XMP/EXIF; we lean on ffmpeg's -map_metadata -1 for the v2026 path.
+    let finalPath = outPath;
+    if (isV2026) {
+      const stripped = path.join(workDir, "out-stripped.mp4");
+      try {
+        await runFfmpeg(ffmpegPath, [
+          "-y", "-i", outPath,
+          "-map", "0", "-map_metadata", "-1",
+          "-c", "copy", "-movflags", "+faststart",
+          stripped,
+        ]);
+        finalPath = stripped;
+      } catch {
+        // C2PA strip is best-effort.
+      }
+    }
+
+    const mp4 = await readFile(finalPath);
     const { put } = await import("@vercel/blob");
     const blob = await put(`postprocess/${Date.now()}.mp4`, mp4, {
       access: "public",

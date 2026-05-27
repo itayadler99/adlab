@@ -292,3 +292,14 @@ What changed
 
 What was tested
 - `npx tsc --noEmit` clean; `npm run build` passes.
+
+---
+
+## Phase 8
+
+### P1 — Brand kit ✅
+- New: `lib/brand-kit.ts`, `app/api/brand-kit/route.ts`, `supabase/migrations/v3_brand_kits.sql`.
+- `getBrandKit(storeId)` reads from `brand_kits` table when Supabase is configured; falls back to hard-coded defaults keyed by store_id; ultimate fallback is a generic neutral kit. No request to Supabase fails the pipeline.
+- `lib/postprocess.ts` now accepts `brandKit?: BrandKit` in `PostProcessOpts`, overlays the logo bottom-right at 8% width, and tints colors toward brand primary via `hexToCurvesTint()` (gentle midtone bias only — doesn't crush skin tones).
+- `POST /api/brand-kit` upserts kit for a store; `GET /api/brand-kit?store_id=…` returns the resolved kit (fallback inclusive).
+- `npx tsc --noEmit` clean; `npm run build` passes.
