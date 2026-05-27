@@ -337,3 +337,10 @@ What was tested
 - Per-stage thumbnails are derived from existing artifact URLs (actor → composite → raw video → final). No new Blob writes per stage, which keeps the stream lightweight and avoids extra storage costs.
 - Existing 5s polling loop in `app/autopilot/page.tsx` is unchanged — the hook is opt-in so we don't break the working flow.
 - `npx tsc --noEmit` clean; `npm run build` passes.
+
+### P7 — Performance feedback loop ✅
+- New: `lib/performance-bias.ts` — `upsertVariantPerf()`, `markWinner()`, `topArchetypes(vertical, limit)` (score = avgRoas × log10(1+sampleSize); filters one-hit wonders), `winnersPrompt()` (prepend block).
+- New: `app/api/cron/learn/route.ts` — daily GET pulls last 30d Meta insights for known variant_perf rows and refreshes CTR/ROAS/spend/impressions. Secured via `CRON_SECRET` query/header. POST handles manual "mark as winner" toggle (fallback when ROAS rollup is too noisy).
+- New: `supabase/migrations/v3_variant_perf.sql` — table + (vertical, hook_archetype, actor_archetype, is_winner) indexes.
+- `lib/anthropic.ts` `writeAdScript` accepts optional `vertical` — prepends winner archetypes to the system prompt; tolerant of Supabase being down (empty bias).
+- `npx tsc --noEmit` clean; `npm run build` passes.

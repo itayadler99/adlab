@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { topArchetypes, winnersPrompt } from "./performance-bias";
 
 let client: Anthropic | null = null;
 export function anthropic(): Anthropic {
@@ -19,8 +20,21 @@ export async function writeAdScript(opts: {
   style: "yapping" | "founder_pov" | "ugc_review" | "demo";
   duration: 15 | 30 | 45;
   targetAudience?: string;
+  /** Optional — when set, the script gets biased toward top-ROAS archetypes for this vertical. */
+  vertical?: string;
 }): Promise<{ script: string; visual_prompt: string; cta: string }> {
-  const sys = `You are an elite Meta Ads UGC scriptwriter. Output strict JSON only:
+  // Performance feedback loop: prepend prior-winner archetypes so the model
+  // steers toward what's already converting. Empty when no data yet.
+  let winnersBlock = "";
+  if (opts.vertical) {
+    try {
+      const winners = await topArchetypes(opts.vertical, 3);
+      winnersBlock = winnersPrompt(winners);
+    } catch {
+      /* tolerate Supabase down — no bias is fine */
+    }
+  }
+  const sys = `${winnersBlock}You are an elite Meta Ads UGC scriptwriter. Output strict JSON only:
 {"script": "...", "visual_prompt": "...", "cta": "..."}
 
 Rules:
