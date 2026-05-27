@@ -14,6 +14,7 @@ import {
   type VoiceArchetype,
 } from "./ugc-prompts";
 import { checkCompositePreservesProduct } from "./vision-check";
+import { renderSoulFrame, predictVirality } from "./higgsfield";
 
 const COMPOSITE_VISION_THRESHOLD = 6; // confidence below this triggers a retry
 const COMPOSITE_MAX_ATTEMPTS = 2;     // first attempt + 1 retry
@@ -60,6 +61,17 @@ export interface UgcInputs {
   language?: "en" | "he";
   /** Raw archetype string from the LLM — normalized via normalizeArchetype(). */
   voiceArchetype?: string;
+  /**
+   * Optional Higgsfield Soul ID — pre-trained character. When set, the actor
+   * stage is short-circuited (no flux-pro call) and the soul's rendered frame
+   * is used as the actor image.
+   */
+  soulId?: string;
+  /**
+   * Enable virality_predictor pre-launch gate. When the final lipsync video
+   * scores <40, the caller may regenerate the hook. Off by default.
+   */
+  viralityGate?: boolean;
 }
 
 export interface UgcArtifacts {
@@ -99,6 +111,9 @@ export interface UgcState {
    * Bumped automatically when a tier fails at submit or poll time.
    */
   lipsyncTier?: 1 | 2 | 3;
+  /** Virality score (0-100) once the gate has run, plus any reasons. */
+  viralityScore?: number;
+  viralityReasons?: string[];
 }
 
 const STAGE_ORDER: UgcStage[] = ["actor", "composite", "animate", "tts", "lipsync", "done"];
@@ -237,6 +252,17 @@ export async function advanceUgc(state: UgcState): Promise<UgcState> {
       break;
     case "lipsync":
       state.artifacts.finalVideoUrl = job.videoUrl;
+      // Virality gate — score the final video; surface results on state but
+      // do not auto-regenerate here. Caller decides whether to re-fan-out.
+      if (state.inputs.viralityGate && job.videoUrl) {
+        try {
+          const pred = await predictVirality(job.videoUrl);
+          state.viralityScore = pred.score;
+          state.viralityReasons = pred.reasons;
+        } catch {
+          /* gate is best-effort */
+        }
+      }
       break;
   }
 
@@ -279,6 +305,33 @@ async function submitStage(
 
   switch (state.stage) {
     case "actor": {
+      // Soul ID short-circuit: render the actor frame directly via Higgsfield.
+      // On success we stash the URL straight into artifacts and skip the FAL
+      // submit. On any failure we fall through to flux-pro so the pipeline
+      // never blocks on Higgsfield availability.
+      if (state.inputs.soulId) {
+        try {
+          const soulFrameUrl = await renderSoulFrame({
+            soulId: state.inputs.soulId,
+            prompt: buildActorPrompt(ctx),
+            aspectRatio: "9:16",
+          });
+          if (soulFrameUrl) {
+            state.artifacts.actorImageUrl = soulFrameUrl;
+            // Skip directly to composite by faking a "succeeded" pending.
+            // Easier: advance the stage here.
+            state.stage = "composite";
+            state.pending = undefined;
+            await submitStage(state, {});
+            return;
+          }
+        } catch (e) {
+          console.warn(
+            "[ugc] Soul ID render failed, falling back to flux-pro:",
+            e instanceof Error ? e.message : e
+          );
+        }
+      }
       endpoint = FAL.actor;
       input = {
         prompt: buildActorPrompt(ctx),

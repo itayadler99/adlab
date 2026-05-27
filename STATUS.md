@@ -310,3 +310,9 @@ What was tested
 - `app/autopilot/page.tsx`: after a UGC run completes, a "Fan out 5 variants" button kicks off `POST /api/generate/variants` with action=start; subsequent ticks call action=advance every 6s and the grid renders 5 9:16 cards side-by-side.
 - Concurrency bounded with `pLimit(3)` to keep FAL/Replicate happy. Hook-generator falls back to "base hook + variant N" labels if Claude returns nothing parseable. Variant count capped at 5 (≥2 floor).
 - `npx tsc --noEmit` clean; `npm run build` passes.
+
+### P3 — Higgsfield Soul ID library + virality gate ✅
+- New: `lib/higgsfield.ts` — direct REST (`listSouls`, `trainSoul`, `renderSoulFrame`, `predictVirality`) with Supabase cache fallback (`soul_library_cache` table). All call paths return safe nulls/50-neutral scores when `HIGGSFIELD_API_URL`/`HIGGSFIELD_API_KEY` aren't set — pipeline never blocks on Higgsfield reachability.
+- New: `app/api/souls/library/route.ts` — GET surface for the live library (existing `/api/souls` kept for backwards compat; this one talks to the Higgsfield REST helper directly).
+- `lib/ugc.ts`: `UgcInputs.soulId` + `viralityGate` flags. When `soulId` is set the actor stage short-circuits `flux-pro` and uses the rendered Soul frame; falls through to flux-pro on any Higgsfield failure. After lipsync, the virality predictor populates `state.viralityScore`/`state.viralityReasons` — caller decides whether to regenerate.
+- `npx tsc --noEmit` clean; `npm run build` passes.
