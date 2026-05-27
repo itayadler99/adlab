@@ -22,7 +22,10 @@ export const FAL = {
   actor:    "fal-ai/flux-pro/v1.1-ultra",
   composite:"fal-ai/nano-banana/edit",
   animate:  "fal-ai/veo3.1/fast/image-to-video",
-  tts:      "fal-ai/elevenlabs/tts/turbo-v2.5",
+  // TTS: prefer eleven-v3 (richer emotion/breath/pauses) with a
+  // turbo-v2.5 fallback if the v3 endpoint rejects the submit.
+  tts:      "fal-ai/elevenlabs/tts/eleven-v3",
+  ttsFallback: "fal-ai/elevenlabs/tts/turbo-v2.5",
   lipsync:  "fal-ai/sync-lipsync/v2",
 } as const;
 
@@ -258,10 +261,34 @@ async function submitStage(
       break;
     }
     case "tts": {
-      endpoint = FAL.tts;
+      const voiceId = pickVoiceId(archetype, state.inputs.language || "en");
+      // eleven-v3 takes a nested voice_settings object; turbo-v2.5 takes the
+      // same fields flat. We submit v3 first and fall back to turbo-v2.5 if
+      // v3 rejects (4xx, unsupported voice, account not enabled, etc.).
+      try {
+        const v3Input = {
+          text: state.inputs.script,
+          voice: voiceId,
+          voice_settings: {
+            stability: 0.5,
+            similarity_boost: 0.75,
+            style: 0.4,
+            use_speaker_boost: true,
+          },
+        };
+        const { request_id } = await falLib.submit(FAL.tts, v3Input);
+        state.pending = { endpoint: FAL.tts, jobId: request_id };
+        return;
+      } catch (e) {
+        console.warn(
+          "[ugc] elevenlabs v3 submit failed, falling back to turbo-v2.5:",
+          e instanceof Error ? e.message : e
+        );
+      }
+      endpoint = FAL.ttsFallback;
       input = {
         text: state.inputs.script,
-        voice: pickVoiceId(archetype, state.inputs.language || "en"),
+        voice: voiceId,
         stability: 0.5,
         similarity_boost: 0.75,
         style: 0.4,

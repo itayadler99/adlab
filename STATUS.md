@@ -252,3 +252,21 @@ What changed
 
 What was tested
 - `npx tsc --noEmit` clean; `npm run build` passes.
+
+### Item 2 — ElevenLabs TTS v3 + fallback ✅ done
+
+What changed
+- `lib/ugc.ts`: TTS stage now submits to `fal-ai/elevenlabs/tts/eleven-v3`
+  with the nested `voice_settings: { stability, similarity_boost, style,
+  use_speaker_boost }` shape for richer emotion / breath / pauses. If the
+  v3 submit throws (4xx, voice not enabled for v3, etc.), we fall back to
+  the previous `fal-ai/elevenlabs/tts/turbo-v2.5` endpoint in-band — the
+  pipeline never sees the failure.
+- `lib/ugc.ts`: exposed `FAL.ttsFallback` alongside `FAL.tts` so both
+  endpoints are visible in one place.
+- Hebrew remains routed via `ELEVENLABS_VOICE_HE` env override (multilingual
+  Rachel as default) — same as before; no v3-specific Hebrew voice id was
+  hardcoded because v3 inherits the voice library.
+
+What was tested
+- `npx tsc --noEmit` clean; `npm run build` passes.
