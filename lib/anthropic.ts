@@ -85,6 +85,14 @@ Write 3 headline variants.`;
   return JSON.parse(m[0]);
 }
 
+/**
+ * Hook-variant generator — N distinct opening hooks for the same script.
+ * Implementation lives in `lib/variants.ts` to keep the variant-runtime
+ * concerns together; this re-export is here so callers that already depend
+ * on `lib/anthropic.ts` can pull it without an extra import.
+ */
+export { generateHookVariants } from "./variants";
+
 export async function scoreAd(opts: {
   transcript: string;
   visual_description?: string;

@@ -157,6 +157,18 @@ export default function AutopilotPage() {
   const ugcTickRef = useRef<number | null>(null);
   const ugcAdvanceInFlightRef = useRef(false);
   const finalUgcUrl = ugcState?.artifacts.finalVideoUrl || null;
+  // Multi-variant fan-out state (P2)
+  interface VariantRunClient {
+    variantIndex: number;
+    hook: string;
+    script: string;
+    state: UgcState;
+  }
+  const [variantRuns, setVariantRuns] = useState<VariantRunClient[] | null>(null);
+  const [variantsLoading, setVariantsLoading] = useState(false);
+  const [variantsError, setVariantsError] = useState("");
+  const variantsTickRef = useRef<number | null>(null);
+  const variantsAdvanceInFlightRef = useRef(false);
   // Showcase mode state
   const [showcaseState, setShowcaseState] = useState<ShowcaseState | null>(null);
   const showcaseTickRef = useRef<number | null>(null);
@@ -186,11 +198,75 @@ export default function AutopilotPage() {
     }
   }
 
+  function clearVariantsTick() {
+    if (variantsTickRef.current !== null) {
+      window.clearInterval(variantsTickRef.current);
+      variantsTickRef.current = null;
+    }
+  }
+
+  async function advanceVariantsOnce() {
+    if (variantsAdvanceInFlightRef.current) return;
+    variantsAdvanceInFlightRef.current = true;
+    try {
+      const current = variantRuns;
+      if (!current || current.length === 0) return;
+      const res = await fetch("/api/generate/variants", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "advance", runs: current }),
+      });
+      const data = (await res.json()) as { runs?: VariantRunClient[]; error?: string };
+      if (!res.ok || data.error || !data.runs) return;
+      setVariantRuns(data.runs);
+      const allDone = data.runs.every(
+        (r) => r.state.stage === "done" || r.state.stage === "failed"
+      );
+      if (allDone) clearVariantsTick();
+    } catch {
+      // swallow — next tick retries
+    } finally {
+      variantsAdvanceInFlightRef.current = false;
+    }
+  }
+
+  async function fanOutVariants() {
+    if (!result?.ugcInputs) return;
+    setVariantsLoading(true);
+    setVariantsError("");
+    try {
+      const inputs = {
+        ...result.ugcInputs,
+        baseScript: result.ugcInputs.script,
+        baseHook: result.ugcInputs.hook,
+        count: 5,
+      };
+      const res = await fetch("/api/generate/variants", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "start", inputs }),
+      });
+      const data = (await res.json()) as { runs?: VariantRunClient[]; error?: string };
+      if (!res.ok || data.error || !data.runs) {
+        setVariantsError(data.error || `variants start failed: ${res.status}`);
+        return;
+      }
+      setVariantRuns(data.runs);
+      clearVariantsTick();
+      variantsTickRef.current = window.setInterval(() => advanceVariantsOnce(), 6000);
+    } catch (e) {
+      setVariantsError(e instanceof Error ? e.message : "variants network error");
+    } finally {
+      setVariantsLoading(false);
+    }
+  }
+
   useEffect(() => {
     return () => {
       clearAllPollers();
       clearUgcTick();
       clearShowcaseTick();
+      clearVariantsTick();
     };
   }, []);
 
@@ -799,6 +875,58 @@ export default function AutopilotPage() {
                     )}
                   </div>
                 </div>
+
+                {/* P2 — Variant fan-out grid */}
+                {result.mode === "ugc" && ugcState?.stage === "done" && (
+                  <div className="space-y-2 mt-2">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-xs font-semibold text-white/60 uppercase tracking-wider">
+                        ‎5 וריאציות hooks (fan-out)
+                      </h3>
+                      <button
+                        type="button"
+                        onClick={fanOutVariants}
+                        disabled={variantsLoading || (variantRuns?.length ?? 0) > 0}
+                        className="px-3 py-1.5 text-xs rounded-md bg-violet-600 hover:bg-violet-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {variantsLoading
+                          ? "מתחיל..."
+                          : variantRuns
+                            ? `${variantRuns.filter((r) => r.state.stage === "done").length}/${variantRuns.length} מוכנות`
+                            : "‎צור 5 וריאציות"}
+                      </button>
+                    </div>
+                    {variantsError && (
+                      <div className="text-xs text-red-300">{variantsError}</div>
+                    )}
+                    {variantRuns && variantRuns.length > 0 && (
+                      <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                        {variantRuns.map((r) => (
+                          <div key={r.variantIndex} className="space-y-1">
+                            <div className="text-[10px] text-white/40 line-clamp-1" title={r.hook}>
+                              {r.hook}
+                            </div>
+                            {r.state.artifacts.finalVideoUrl ? (
+                              <video
+                                src={r.state.artifacts.finalVideoUrl}
+                                controls
+                                className="w-full aspect-[9/16] object-cover rounded-lg border border-emerald-500/40 bg-zinc-900"
+                              />
+                            ) : r.state.stage === "failed" ? (
+                              <div className="aspect-[9/16] bg-zinc-900 border border-red-500/30 rounded-lg flex items-center justify-center text-[10px] text-red-300 text-center px-2">
+                                {r.state.error || "נכשל"}
+                              </div>
+                            ) : (
+                              <div className="aspect-[9/16] bg-zinc-900 border border-white/10 rounded-lg flex items-center justify-center text-[10px] text-white/40">
+                                {UGC_STAGE_LABEL[r.state.stage]}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </section>
             )}
 

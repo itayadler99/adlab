@@ -303,3 +303,10 @@ What was tested
 - `lib/postprocess.ts` now accepts `brandKit?: BrandKit` in `PostProcessOpts`, overlays the logo bottom-right at 8% width, and tints colors toward brand primary via `hexToCurvesTint()` (gentle midtone bias only — doesn't crush skin tones).
 - `POST /api/brand-kit` upserts kit for a store; `GET /api/brand-kit?store_id=…` returns the resolved kit (fallback inclusive).
 - `npx tsc --noEmit` clean; `npm run build` passes.
+
+### P2 — Multi-variant fan-out ✅
+- New: `lib/variants.ts` (`generateHookVariants`, `pLimit` shim, `startVariants`, `advanceVariants`), `app/api/generate/variants/route.ts` (start + advance actions).
+- `lib/anthropic.ts` re-exports `generateHookVariants` so the existing import surface widens without breaking callers.
+- `app/autopilot/page.tsx`: after a UGC run completes, a "Fan out 5 variants" button kicks off `POST /api/generate/variants` with action=start; subsequent ticks call action=advance every 6s and the grid renders 5 9:16 cards side-by-side.
+- Concurrency bounded with `pLimit(3)` to keep FAL/Replicate happy. Hook-generator falls back to "base hook + variant N" labels if Claude returns nothing parseable. Variant count capped at 5 (≥2 floor).
+- `npx tsc --noEmit` clean; `npm run build` passes.
