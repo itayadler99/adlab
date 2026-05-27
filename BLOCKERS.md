@@ -68,3 +68,100 @@ A 200 / queued response means v3 is live; 4xx falls through to turbo.
 bundle. Hobby tier caps function size at 50 MB unzipped, Pro at 250 MB.
 If deploy fails with "Function size exceeds the maximum", upgrade or
 strip the tier-3 fallback (then we live with FAL+Replicate only).
+
+---
+
+## Phase 8 V3 ultra additions
+
+### Supabase migrations to run
+
+The Phase 8 schemas need to be applied before the brand-kit / variant_perf
+features have any persistence. Apply via the Supabase SQL editor or psql:
+
+```sh
+psql "$SUPABASE_DB_URL" -f supabase/migrations/v3_brand_kits.sql
+psql "$SUPABASE_DB_URL" -f supabase/migrations/v3_variant_perf.sql
+```
+
+Both tables degrade gracefully when missing:
+- `getBrandKit()` falls back to hard-coded defaults in `lib/brand-kit.ts`.
+- `topArchetypes()` returns `[]` and the script generator runs without bias.
+- `upsertVariantPerf()` is a no-op when the table is missing.
+
+Also: the `lib/higgsfield.ts` Soul cache writes to a `soul_library_cache`
+table. That table is intentionally not in the migrations bundle — create it
+manually only if you want the offline cache:
+
+```sql
+create table if not exists soul_library_cache (
+  id text primary key,
+  souls jsonb,
+  cached_at timestamptz default now()
+);
+```
+
+### New env vars (P3, P7, P8)
+
+```sh
+# Higgsfield REST (P3) — required for live Soul training/rendering & virality_predictor.
+# When unset, the pipeline falls back to flux-pro for actor stage and a neutral
+# 50 score for virality.
+vercel env add HIGGSFIELD_API_URL production
+vercel env add HIGGSFIELD_API_KEY production
+
+# Cron secret (P7) — guards GET /api/cron/learn.
+vercel env add CRON_SECRET production
+
+# Captions Mirage premium (P8) — premium UGC bypass route.
+vercel env add CAPTIONS_MIRAGE_API_URL production   # defaults to https://api.captions.ai/v1
+vercel env add CAPTIONS_MIRAGE_API_KEY production
+```
+
+### Music bed drop list (P5)
+
+The directories `public/music/{jewelry,sneakers,saas,studio,universal}/`
+ship empty (`.gitkeep` only). Drop 3-5 royalty-free `.mp3` tracks into each
+vertical and commit. Recommended sources:
+
+- Universal: Bensound, Pixabay Music (CC0)
+- Jewelry: ambient luxury — search "luxury ambient" on Pixabay
+- Sneakers: hip-hop bed loops
+- SaaS: lo-fi corporate
+- Studio: cinematic ambient
+
+`pickMusicTrack(vertical)` random-picks per generation; falls through to
+`universal/` then null when empty.
+
+### Higgsfield MCP vs REST quirks (P3)
+
+Vercel functions had flaky MCP reachability in prior testing, so
+`lib/higgsfield.ts` talks REST directly (`HIGGSFIELD_API_URL`/`KEY`).
+The MCP schema names are kept in code comments as a reference — the
+adapter only needs `/v1/souls`, `/v1/souls/train`, `/v1/souls/{id}/render`,
+and `/v1/virality/predict`.
+
+### Cron schedule for /api/cron/learn (P7)
+
+Add to `vercel.json`:
+
+```json
+{
+  "crons": [
+    { "path": "/api/cron/learn?secret=<CRON_SECRET>", "schedule": "0 6 * * *" }
+  ]
+}
+```
+
+Runs daily at 06:00 UTC. Verify with:
+
+```sh
+curl -s "https://<deploy-url>/api/cron/learn?secret=$CRON_SECRET" | jq
+# expected: {"ok":true,"scanned":N,"updated":N}
+```
+
+### Topaz Astra v2 not on Replicate
+
+The 2026-correct chain calls for Topaz Astra v2 at the upscale step.
+Topaz lacks a Replicate slug; we substitute `lucataco/real-esrgan-video`
+in `lib/postprocess.ts`. Quality is close-but-not-identical — if a
+Topaz REST endpoint ships later, swap `UPSCALE_MODEL` and we're done.
