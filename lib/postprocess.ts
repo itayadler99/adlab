@@ -302,6 +302,56 @@ async function runFfmpegRealism(videoUrl: string, opts: PostProcessOpts = {}): P
   }
 }
 
+// ---- Caption burn-in (libass) ---------------------------------------------
+
+/**
+ * Burn a libass .ass file into a video URL. Used by the captions pipeline
+ * after `lib/captions.ts` produces the .ass.
+ */
+export async function burnCaptions(videoUrl: string, assPath: string): Promise<string> {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const ffmpegPath = require("ffmpeg-static") as string | null;
+  if (!ffmpegPath) throw new Error("ffmpeg-static binary not available");
+  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    throw new Error("BLOB_READ_WRITE_TOKEN required for burnCaptions");
+  }
+
+  const workDir = await mkdtemp(path.join(tmpdir(), "cap-"));
+  try {
+    const res = await fetch(videoUrl);
+    if (!res.ok) throw new Error(`fetch ${videoUrl}: HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    const inPath = path.join(workDir, "in.mp4");
+    const outPath = path.join(workDir, "out.mp4");
+    await writeFile(inPath, buf);
+
+    // libass needs the path forward-slashed and any : escaped.
+    const safeAss = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
+    await runFfmpeg(ffmpegPath, [
+      "-y", "-i", inPath,
+      "-vf", `ass=${safeAss}`,
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+      "-c:a", "copy",
+      "-pix_fmt", "yuv420p",
+      "-movflags", "+faststart",
+      outPath,
+    ]);
+
+    const sz = (await stat(outPath)).size;
+    if (sz < 1024) throw new Error(`burnCaptions mp4 too small (${sz} bytes)`);
+    const mp4 = await readFile(outPath);
+    const { put } = await import("@vercel/blob");
+    const blob = await put(`captions/${Date.now()}.mp4`, mp4, {
+      access: "public",
+      contentType: "video/mp4",
+      addRandomSuffix: true,
+    });
+    return blob.url;
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
 function runFfmpeg(bin: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
     const proc = spawn(bin, args, { stdio: ["ignore", "ignore", "pipe"] });

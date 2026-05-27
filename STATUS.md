@@ -316,3 +316,10 @@ What was tested
 - New: `app/api/souls/library/route.ts` — GET surface for the live library (existing `/api/souls` kept for backwards compat; this one talks to the Higgsfield REST helper directly).
 - `lib/ugc.ts`: `UgcInputs.soulId` + `viralityGate` flags. When `soulId` is set the actor stage short-circuits `flux-pro` and uses the rendered Soul frame; falls through to flux-pro on any Higgsfield failure. After lipsync, the virality predictor populates `state.viralityScore`/`state.viralityReasons` — caller decides whether to regenerate.
 - `npx tsc --noEmit` clean; `npm run build` passes.
+
+### P4 — Captions burn-in with bouncing words ✅
+- New: `lib/captions.ts` — `buildAssFile()` + `writeAssFile()` + `buildCaptionsForVideo()`. Generates a libass .ass file with `\fad(60,60)` soft fades + `\t(0,150,\fscx115\fscy115)` bounce-up tag for each word event. RTL-aware (`language: "he"` keeps Hebrew strings intact; libass + fribidi handles bidi).
+- `app/api/transcribe/route.ts` now accepts `wordTimestamps: true`, switches to Whisper `verbose_json` + `timestamp_granularities[]=word`, and returns `words[]` alongside the transcript.
+- `lib/postprocess.ts` adds `burnCaptions(url, assPath)` — single ffmpeg pass with `-vf ass=…` (libass, NOT drawtext). Outputs to Vercel Blob.
+- `app/api/postprocess/route.ts` now accepts `captions: { enabled, position, highlightHex, fontFamily }` and runs the caption burn-in AFTER realism. Falls back to no captions on missing word timestamps (Whisper account quirk). Brand kit secondary hex + font family flow through automatically.
+- `npx tsc --noEmit` clean; `npm run build` passes.

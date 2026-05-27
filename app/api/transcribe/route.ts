@@ -5,9 +5,15 @@ export const maxDuration = 60;
 
 // Downloads a video/audio URL and sends it to OpenAI Whisper for transcription.
 // Whisper accepts mp4/m4a/mp3 directly — no ffmpeg required.
+//
+// Pass `wordTimestamps: true` to get verbose_json + word-level timestamps,
+// which the captions module needs to build the bouncing-word .ass file.
 export async function POST(req: Request) {
   try {
-    const { url } = await req.json();
+    const { url, wordTimestamps } = (await req.json()) as {
+      url?: string;
+      wordTimestamps?: boolean;
+    };
     if (!url) return NextResponse.json({ error: "url required" }, { status: 400 });
 
     const key = process.env.OPENAI_API_KEY;
@@ -24,6 +30,10 @@ export async function POST(req: Request) {
     const form = new FormData();
     form.append("file", new Blob([buf], { type: contentType }), `clip.${ext}`);
     form.append("model", "whisper-1");
+    if (wordTimestamps) {
+      form.append("response_format", "verbose_json");
+      form.append("timestamp_granularities[]", "word");
+    }
 
     const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
       method: "POST",
@@ -32,6 +42,14 @@ export async function POST(req: Request) {
     });
     const out = await res.json();
     if (out.error) return NextResponse.json({ error: out.error.message }, { status: 500 });
+    if (wordTimestamps) {
+      return NextResponse.json({
+        transcript: out.text,
+        words: out.words ?? [],
+        language: out.language,
+        duration: out.duration,
+      });
+    }
     return NextResponse.json({ transcript: out.text });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });

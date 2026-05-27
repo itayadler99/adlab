@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { applyRealism, type PostProcessLevel, type CaptionStyle } from "@/lib/postprocess";
+import { applyRealism, burnCaptions, type PostProcessLevel, type CaptionStyle } from "@/lib/postprocess";
+import { buildCaptionsForVideo } from "@/lib/captions";
 import { getBrandKit } from "@/lib/brand-kit";
 
 export const runtime = "nodejs";
@@ -32,7 +33,40 @@ export async function POST(req: NextRequest) {
       goldenHour: body.goldenHour,
       lighting: body.lighting,
     });
-    return NextResponse.json(result);
+
+    // Optional caption burn-in (P4). Off by default. We burn AFTER realism so
+    // we don't re-grade graded captions.
+    let captionUrl: string | undefined;
+    let captionsError: string | undefined;
+    if (body.captions?.enabled) {
+      try {
+        const origin = req.nextUrl.origin;
+        const built = await buildCaptionsForVideo({
+          videoUrl: result.url,
+          baseUrl: origin,
+          language: req.nextUrl.searchParams.get("lang") === "he" ? "he" : "en",
+          style: {
+            highlightHex: body.captions.highlightHex ?? brandKit?.secondaryHex,
+            fontFamily: body.captions.fontFamily ?? brandKit?.fontFamily,
+            position: body.captions.position ?? "bottom",
+          },
+        });
+        if (built) {
+          captionUrl = await burnCaptions(result.url, built.assPath);
+        } else {
+          captionsError = "could not produce word timestamps";
+        }
+      } catch (e) {
+        captionsError = e instanceof Error ? e.message : String(e);
+      }
+    }
+
+    return NextResponse.json({
+      ...result,
+      url: captionUrl ?? result.url,
+      captionsApplied: Boolean(captionUrl),
+      captionsError,
+    });
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "postprocess failed" },
