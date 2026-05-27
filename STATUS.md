@@ -232,3 +232,63 @@ this build ran in has no outbound network for the actual model calls;
 all tiers are typechecked + built. Owner can `git pull` the branch
 into main, redeploy on Vercel, and run `scripts/smoke-stitch.mjs`
 against `https://adlab-amber.vercel.app` to validate tier ordering.
+
+## Phase 7 — Final realism gap closure
+
+### Item 1 — Route text-bearing images through nano-banana ✅ done
+
+What changed
+- `lib/images.ts`: text-bearing sales images now route through
+  `fal-ai/nano-banana/edit` (when a real product image is available) or
+  `fal-ai/nano-banana` (otherwise), with a `recraft/v3 → flux-pro/v1.1-ultra
+  → Replicate ideogram` fallback chain. Each prompt carries an explicit
+  "Render text EXACTLY as: '...'" anchor for headline, bullets, and brand.
+- `lib/images.ts`: `ImageJob.id` is now provider-tagged
+  (`fal:<endpoint>:<requestId>` vs plain Replicate id) so the existing
+  `/api/poll?kind=image` route dispatches to the right provider with no
+  schema change on the client.
+- `lib/autopilot.ts`: passes `productImageUrl` + `hasText: true` into
+  `startSalesImages`.
+
+What was tested
+- `npx tsc --noEmit` clean; `npm run build` passes.
+
+### Item 2 — ElevenLabs TTS v3 + fallback ✅ done
+
+What changed
+- `lib/ugc.ts`: TTS stage now submits to `fal-ai/elevenlabs/tts/eleven-v3`
+  with the nested `voice_settings: { stability, similarity_boost, style,
+  use_speaker_boost }` shape for richer emotion / breath / pauses. If the
+  v3 submit throws (4xx, voice not enabled for v3, etc.), we fall back to
+  the previous `fal-ai/elevenlabs/tts/turbo-v2.5` endpoint in-band — the
+  pipeline never sees the failure.
+- `lib/ugc.ts`: exposed `FAL.ttsFallback` alongside `FAL.tts` so both
+  endpoints are visible in one place.
+- Hebrew remains routed via `ELEVENLABS_VOICE_HE` env override (multilingual
+  Rachel as default) — same as before; no v3-specific Hebrew voice id was
+  hardcoded because v3 inherits the voice library.
+
+What was tested
+- `npx tsc --noEmit` clean; `npm run build` passes.
+
+### Item 3 — Lipsync swap to sync-labs/lipsync-2 ✅ done
+
+What changed
+- `lib/ugc.ts`: lipsync stage now runs a tiered fallback chain — Replicate
+  `sync/lipsync-2` (tier 1, best 2026 Hebrew phoneme accuracy) → FAL
+  `sync-lipsync/v2` (tier 2, the previous default) → Replicate
+  `cjwbw/wav2lip` (tier 3, last resort). Submit-time failures advance the
+  tier in-band; poll-time failures advance the tier in `advanceUgc`. The
+  pipeline never tears down a UGC run when an upstream lipsync model is
+  unavailable as long as one tier still works.
+- `lib/ugc.ts`: `UgcState.pending` now carries a `provider: "fal" |
+  "replicate"` tag (optional for backwards compat); `advanceUgc` polls
+  the correct provider per pending job. Added `lipsyncTier` to the state
+  so the chain survives client round-trips.
+- `lib/ugc.ts`: introduced `pollReplicateJob` to unwrap the
+  string / array / object output shapes Replicate models return for video.
+- `BLOCKERS.md`: documented the smoke test for sync/lipsync-2 access
+  (no new env vars required — uses the existing `REPLICATE_API_TOKEN`).
+
+What was tested
+- `npx tsc --noEmit` clean; `npm run build` passes.

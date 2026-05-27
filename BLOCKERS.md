@@ -25,6 +25,42 @@ vercel env add BLOB_READ_WRITE_TOKEN development
 After adding, redeploy with `vercel --prod` (or push to main) so the
 runtime picks up the new env.
 
+## Replicate `sync/lipsync-2` model access (Phase 7)
+
+The new UGC lipsync tier 1 is `sync/lipsync-2` on Replicate (~$0.05/sec,
+best 2026 Hebrew phoneme accuracy). The model is on Replicate's hosted
+catalog so no extra env vars are needed beyond `REPLICATE_API_TOKEN`,
+but verify a real prediction succeeds the first time the pipeline
+runs in production:
+
+```sh
+# Quick check (replace token):
+curl -s -X POST https://api.replicate.com/v1/models/sync/lipsync-2/predictions \
+  -H "Authorization: Bearer $REPLICATE_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"input":{"video":"<small mp4>","audio":"<small mp3>"}}' | jq
+```
+
+If Replicate returns 402 / "not enabled for this account" the pipeline
+will auto-fall through to FAL `sync-lipsync/v2` and then Replicate
+`cjwbw/wav2lip`, so no hard breakage — just upgrade the Replicate plan
+if you want the v2 quality.
+
+## ElevenLabs v3 access (Phase 7)
+
+UGC TTS now defaults to `fal-ai/elevenlabs/tts/eleven-v3`. If the FAL
+account isn't enabled for v3 yet, the pipeline falls back to
+`turbo-v2.5` automatically. To verify v3 is live:
+
+```sh
+curl -s -X POST https://queue.fal.run/fal-ai/elevenlabs/tts/eleven-v3 \
+  -H "Authorization: Key $FAL_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"hello","voice":"21m00Tcm4TlvDq8ikWAM","voice_settings":{"stability":0.5,"similarity_boost":0.75,"style":0.4,"use_speaker_boost":true}}' | jq
+```
+
+A 200 / queued response means v3 is live; 4xx falls through to turbo.
+
 ## Vercel function size
 
 `ffmpeg-static` ships a ~77 MB binary. With it externalized via

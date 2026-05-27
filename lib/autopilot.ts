@@ -488,6 +488,8 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
         hook: analysis.hook,
         bullets,
         brand: "Montier",
+        productImageUrl: product.imageUrl,
+        hasText: true,
       },
       3
     );
