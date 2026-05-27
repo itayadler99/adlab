@@ -351,3 +351,18 @@ What was tested
 - New: `lib/captions-mirage.ts` — `generateMiragePremium()` submits the full script+product+hook to Captions Mirage API and polls until ready (8min cap, 5s tick). Behind `CAPTIONS_MIRAGE_API_KEY` feature flag — `isPremiumEnabled()` short-circuits the route when unset.
 - New: `app/api/ugc/premium/route.ts` — POST → premium pipeline; returns 503 when key not set so the standard 5-stage UGC remains the path.
 - `npx tsc --noEmit` clean; `npm run build` passes (all routes now dynamic because root layout reads headers — acceptable trade-off for runtime RTL switching).
+
+### Post-processing chain upgrade ✅
+- `lib/postprocess.ts` v2026 pipeline (opt in via `opts.pipeline = "v2026"`):
+  1. RIFE interp → 48fps (existing `runRife` already passes `fps: 48` — matches "NOT 60").
+  2. Upscale-restore via `lucataco/real-esrgan-video` (stand-in for Topaz Astra v2 since Topaz lacks a Replicate slug).
+  3. LUT approximation (curves expansion mimicking Apple Log → Rec709) in `build2026VideoFilter`.
+  4. unsharp `3:3:0.6:3:3:0.0` (luma only, NOT 5:5:1.0).
+  5. Grain `noise=c0s=8:c0f=t+u` (12 at night), placed AFTER LUT but BEFORE shake.
+  6. Halation pass (gblur on luma) — opt in via `opts.goldenHour`.
+  7. Shake: `rotate='0.0015*sin(2*PI*t/3)'` sub-pixel sine drift (NOT vidstab).
+  8. Audio: per-band EQ (200Hz -3, 4kHz -2.5 Q=1.4, 8kHz +1.5), acompressor 3:1 @ -18dB, loudnorm I=-14 LUFS.
+  9. C2PA strip: second-pass `-map_metadata -1` re-mux.
+- Brand kit logo overlay (8% width, bottom-right 24px) runs as part of the same `filter_complex`.
+- Legacy chain remains the default; existing callers untouched.
+- `npx tsc --noEmit` clean; `npm run build` passes.

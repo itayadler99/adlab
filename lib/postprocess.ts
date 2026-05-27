@@ -1,10 +1,28 @@
 // Post-processing pass that turns a sterile AI video into something closer to
-// real iPhone footage. Three knobs:
-//   - "off":   pass through (original URL).
-//   - "fast":  ffmpeg-static only — grain + teal/orange curves + unsharp.
-//              ~5-10s, no external cost.
-//   - "speel": Replicate RIFE interp 24→48fps first, then the ffmpeg pass.
-//              ~30-90s, ~$0.05.
+// real iPhone footage.
+//
+// Two levels of chain:
+//   legacy: noise → curves teal/orange → eq → unsharp 5:5:0.7. Cheap default.
+//   v2026 (2026-correct ordering, opt in via opts.pipeline="v2026"):
+//     1.  interp        — RIFE multiplier=2 → 48fps (NOT 60, which trips
+//                          soap-opera uncanny). Runs as Replicate step.
+//     2.  upscale-restore — Topaz Astra v2 (creativity=2 sharpness=3),
+//                          mapped here to the working real-esrgan-video slug
+//                          on Replicate; 1080→1080 grain-preserving.
+//     3.  LUT           — Apple Log → Rec709 approximation.
+//     4.  unsharp       — 3:3:0.6:3:3:0.0 (luma only, NOT 5:5:1.0).
+//     5.  grain         — noise=c0s=8:c0f=t+u luma-only temporal; daylight
+//                          8, night 12. Grain BEFORE shake (shake would
+//                          stretch grain → baked-in look).
+//     6.  halation pass — golden-hour only (gblur on red highlights plane).
+//     7.  shake         — sine-driven sub-pixel rotate (NOT vidstab).
+//     8.  audio mix     — room tone at -42dB under VO (room tone sourced
+//                          upstream via ElevenLabs SFX; not added here).
+//     9.  dialogue EQ   — 200Hz -3dB, 4kHz -2.5dB Q=1.4, 8kHz +1.5dB +
+//                          acompressor 3:1 @ -18dB.
+//    10.  encode        — libx264 CRF 20 (NOT 23), 192k AAC, loudnorm -14
+//                          LUFS, +faststart.
+//    11.  C2PA strip    — -map_metadata -1 second pass.
 //
 // On any failure the pipeline returns the input URL untouched and surfaces
 // the error in `trace.error` — the goal is "never block the final ad".
@@ -261,8 +279,17 @@ async function runFfmpegRealism(videoUrl: string, opts: PostProcessOpts = {}): P
       "-movflags", "+faststart",
     );
     if (isV2026) {
-      // -14 LUFS broadcast standard. Tolerate failure on tiny clips.
-      ffmpegArgs.push("-af", "loudnorm=I=-14:TP=-1.5:LRA=11");
+      // 2026-correct dialogue chain: per-band EQ → 3:1 comp @ -18dB → loudnorm -14 LUFS.
+      //   200Hz -3dB Q=1.4  (clean rumble)
+      //   4kHz  -2.5dB Q=1.4 (de-ess / mid presence cut)
+      //   8kHz  +1.5dB      (air)
+      const dialogueChain =
+        "equalizer=f=200:t=q:w=1.4:g=-3," +
+        "equalizer=f=4000:t=q:w=1.4:g=-2.5," +
+        "equalizer=f=8000:t=q:w=1.4:g=1.5," +
+        "acompressor=threshold=-18dB:ratio=3:attack=20:release=250:makeup=2," +
+        "loudnorm=I=-14:TP=-1.5:LRA=11";
+      ffmpegArgs.push("-af", dialogueChain);
     }
     ffmpegArgs.push(outPath);
 
