@@ -344,3 +344,10 @@ What was tested
 - New: `supabase/migrations/v3_variant_perf.sql` — table + (vertical, hook_archetype, actor_archetype, is_winner) indexes.
 - `lib/anthropic.ts` `writeAdScript` accepts optional `vertical` — prepends winner archetypes to the system prompt; tolerant of Supabase being down (empty bias).
 - `npx tsc --noEmit` clean; `npm run build` passes.
+
+### P8 — RTL Hebrew UX + Captions Mirage premium routing ✅
+- `app/layout.tsx`: now async, reads `x-lang` header for override, defaults to `lang="he" dir="rtl"`. Heebo preloaded via Google Fonts.
+- `app/globals.css`: `--font-sans` set to Heebo (Inter fallback) so the body is Hebrew-first. Adds `.ltr-island` utility for English admin sections inside RTL.
+- New: `lib/captions-mirage.ts` — `generateMiragePremium()` submits the full script+product+hook to Captions Mirage API and polls until ready (8min cap, 5s tick). Behind `CAPTIONS_MIRAGE_API_KEY` feature flag — `isPremiumEnabled()` short-circuits the route when unset.
+- New: `app/api/ugc/premium/route.ts` — POST → premium pipeline; returns 503 when key not set so the standard 5-stage UGC remains the path.
+- `npx tsc --noEmit` clean; `npm run build` passes (all routes now dynamic because root layout reads headers — acceptable trade-off for runtime RTL switching).
