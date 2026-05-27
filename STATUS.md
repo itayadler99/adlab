@@ -330,3 +330,10 @@ What was tested
 - `lib/postprocess.ts` adds `addMusicBed(url, musicPath, { musicDb })` — ffmpeg filter graph with `sidechaincompress=threshold=0.05:ratio=8:attack=20:release=300` keyed off the VO so music ducks under speech. Music loops to cover video length via `-stream_loop -1`.
 - `app/api/postprocess/route.ts` `music: { enabled, vertical, musicDb }` opt — vertical resolved from `storeId` when omitted; gracefully no-ops with an explanatory `musicError` if the directory is empty.
 - `npx tsc --noEmit` clean; `npm run build` passes.
+
+### P6 — Real-time preview stream ✅
+- New: `app/api/generate/stream/route.ts` — SSE endpoint. Client POSTs `{ pipeline, ugc?|showcase? }` with the initial state, the route advances internally and emits `stage` events (with `thumbnailUrl` = best-available artifact) + final `done` or `error`.
+- New: `hooks/useGenerationStream.ts` — typed client hook that reads the SSE body, exposes `{ stage, thumbnailUrl, error, isStreaming }`, and **automatically falls back to a polled `/api/{ugc,showcase}/advance` loop** when the stream connection fails (matches the documented fallback).
+- Per-stage thumbnails are derived from existing artifact URLs (actor → composite → raw video → final). No new Blob writes per stage, which keeps the stream lightweight and avoids extra storage costs.
+- Existing 5s polling loop in `app/autopilot/page.tsx` is unchanged — the hook is opt-in so we don't break the working flow.
+- `npx tsc --noEmit` clean; `npm run build` passes.
