@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { startVideo, VideoModel } from "@/lib/video";
-import { saveVideo } from "@/lib/db";
+import { db, saveVideo } from "@/lib/db";
 
 export async function POST(req: NextRequest) {
   try {
@@ -32,13 +32,21 @@ export async function POST(req: NextRequest) {
 
     const job = await startVideo(prompt, model);
 
-    await saveVideo({
-      id: job.id,
-      prompt,
-      model,
-      status: job.status,
-      videoUrl: job.videoUrl,
-    });
+    // Supabase is optional — when not configured, return the job id so the
+    // caller can poll the provider directly. Persistence is a nice-to-have.
+    if (db) {
+      try {
+        await saveVideo({
+          id: job.id,
+          prompt,
+          model,
+          status: job.status,
+          videoUrl: job.videoUrl,
+        });
+      } catch (e) {
+        console.warn("[generate/video] saveVideo failed (non-fatal):", e instanceof Error ? e.message : e);
+      }
+    }
 
     return NextResponse.json({ jobId: job.id, model, status: job.status });
   } catch (err: unknown) {
