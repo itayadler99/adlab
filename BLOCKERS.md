@@ -1,5 +1,25 @@
 # BLOCKERS — required to flip on the new pipeline
 
+## ⛔ Phase 9: execution-environment network allowlist blocks all verification
+
+The Phase 9 cloud run could not reach **any** of the hosts it needed. The
+environment enforces an outbound allowlist; everything Phase 9 touches returns
+`HTTP 403 "Host not in allowlist"`:
+
+- `adlab-amber.vercel.app` (prod — required for `scripts/smoke-prod.sh`)
+- `api.replicate.com` (required to verify/route the new primary models)
+- `queue.fal.run`, `api.elevenlabs.io`
+
+Only `registry.npmjs.org` (and GitHub via MCP) are reachable. Because prod and
+Replicate are unreachable, the mandatory smoke test cannot run and the
+FAL→Replicate swaps cannot be verified — so they were intentionally **not**
+written (shipping unverifiable model slugs risks breaking prod, which the task
+forbids). See `STATUS_PHASE9.md`.
+
+**Unblock:** run the task in an environment whose network policy allowlists
+`*.vercel.app`, `api.replicate.com`, `queue.fal.run`, `api.elevenlabs.io`
+(or an unrestricted policy), then use `scripts/smoke-prod.sh` as the gate.
+
 ## BLOB_READ_WRITE_TOKEN (Vercel Blob)
 
 Tier 3 of the stitch fallback (`lib/stitch.ts`) uploads the stitched MP4
