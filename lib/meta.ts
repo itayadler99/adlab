@@ -39,22 +39,145 @@ export async function metaPost<T = any>(path: string, body: Record<string, any> 
   return json;
 }
 
-export async function getCampaigns(statusFilter: "ACTIVE" | "PAUSED" | "ALL" = "ALL") {
+export interface Campaign {
+  id: string;
+  name?: string;
+  status?: string;
+  effective_status?: string;
+  objective?: string;
+  daily_budget?: string;
+  lifetime_budget?: string;
+  created_time?: string;
+}
+
+export interface InsightRow {
+  campaign_id?: string;
+  spend?: string;
+  impressions?: string;
+  clicks?: string;
+  ctr?: string;
+  cpc?: string;
+  cpm?: string;
+  actions?: Array<{ action_type: string; value: string }>;
+  action_values?: Array<{ action_type: string; value: string }>;
+  purchase_roas?: Array<{ action_type?: string; value: string }>;
+  date_start?: string;
+  date_stop?: string;
+}
+
+// Meta reports purchases under several action_type aliases depending on
+// pixel/conversion-api setup. Check them in priority order.
+const PURCHASE_ACTION_TYPES = [
+  "offsite_conversion.fb_pixel_purchase",
+  "omni_purchase",
+  "purchase",
+];
+
+const INSIGHT_FIELDS =
+  "spend,impressions,clicks,ctr,cpc,cpm,actions,action_values,purchase_roas";
+
+/** Lifetime purchase count from an insight row (0 when none). */
+export function purchaseCount(row?: InsightRow | null): number {
+  if (!row?.actions) return 0;
+  for (const t of PURCHASE_ACTION_TYPES) {
+    const a = row.actions.find((x) => x.action_type === t);
+    if (a) return Math.round(Number(a.value) || 0);
+  }
+  return 0;
+}
+
+/** Purchase revenue (value) from an insight row. */
+export function purchaseValue(row?: InsightRow | null): number {
+  if (!row?.action_values) return 0;
+  for (const t of PURCHASE_ACTION_TYPES) {
+    const a = row.action_values.find((x) => x.action_type === t);
+    if (a) return Number(a.value) || 0;
+  }
+  return 0;
+}
+
+/** ROAS from an insight row. Prefers Meta's purchase_roas, falls back to value/spend. Null when no spend. */
+export function roasOf(row?: InsightRow | null): number | null {
+  if (!row) return null;
+  if (row.purchase_roas?.length) {
+    const v = Number(row.purchase_roas[0].value);
+    if (Number.isFinite(v)) return v;
+  }
+  const spend = Number(row.spend) || 0;
+  if (spend <= 0) return null;
+  return purchaseValue(row) / spend;
+}
+
+export function spendOf(row?: InsightRow | null): number {
+  return Number(row?.spend) || 0;
+}
+
+export async function getCampaigns(
+  statusFilter: "ACTIVE" | "PAUSED" | "ALL" = "ALL"
+): Promise<Campaign[]> {
   const params: Record<string, string> = {
-    fields: "id,name,status,objective,daily_budget,lifetime_budget,created_time",
+    fields: "id,name,status,effective_status,objective,daily_budget,lifetime_budget,created_time",
     limit: "100",
   };
   if (statusFilter !== "ALL") {
     params.effective_status = JSON.stringify([statusFilter]);
   }
-  return metaGet(`/${adAccount()}/campaigns`, params);
+  const json = await metaGet<{ data?: Campaign[] }>(`/${adAccount()}/campaigns`, params);
+  return json.data ?? [];
 }
 
-export async function getCampaignInsights(campaignId: string, datePreset = "last_7d") {
-  return metaGet(`/${campaignId}/insights`, {
-    fields: "spend,impressions,clicks,ctr,cpc,cpm,actions,action_values,purchase_roas",
+/** Single-window insight rows for one campaign. Unwraps Meta's `{data}` envelope. */
+export async function getCampaignInsights(
+  campaignId: string,
+  datePreset = "last_7d"
+): Promise<InsightRow[]> {
+  const json = await metaGet<{ data?: InsightRow[] }>(`/${campaignId}/insights`, {
+    fields: INSIGHT_FIELDS,
     date_preset: datePreset,
   });
+  return json.data ?? [];
+}
+
+export interface MultiWindowInsights {
+  lifetime: InsightRow | null;
+  d7: InsightRow | null;
+  d30: InsightRow | null;
+}
+
+/**
+ * Itay's ironclad rule: always read lifetime + 7d + 30d. `date_preset=maximum`
+ * is the lifetime window. Returns the single aggregated row per window (or null).
+ */
+export async function getCampaignInsightsMulti(
+  campaignId: string
+): Promise<MultiWindowInsights> {
+  const [lifetime, d7, d30] = await Promise.all([
+    getCampaignInsights(campaignId, "maximum").catch(() => []),
+    getCampaignInsights(campaignId, "last_7d").catch(() => []),
+    getCampaignInsights(campaignId, "last_30d").catch(() => []),
+  ]);
+  return {
+    lifetime: lifetime[0] ?? null,
+    d7: d7[0] ?? null,
+    d30: d30[0] ?? null,
+  };
+}
+
+/** Account-level insights broken down by campaign, keyed by campaign_id. One API call. */
+export async function getAccountCampaignInsights(
+  datePreset = "last_7d"
+): Promise<Record<string, InsightRow>> {
+  const json = await metaGet<{ data?: InsightRow[] }>(`/${adAccount()}/insights`, {
+    level: "campaign",
+    fields: `campaign_id,${INSIGHT_FIELDS}`,
+    date_preset: datePreset,
+    limit: "200",
+  });
+  const map: Record<string, InsightRow> = {};
+  for (const r of json.data ?? []) {
+    if (r.campaign_id) map[r.campaign_id] = r;
+  }
+  return map;
 }
 
 export async function createCampaign(opts: {
