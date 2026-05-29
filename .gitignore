@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+adlab-audio/
+adlab-meta/
+adlab-ux/
+adlab-video/
+
