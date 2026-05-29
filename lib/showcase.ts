@@ -109,6 +109,50 @@ export async function advanceShowcase(state: ShowcaseState): Promise<ShowcaseSta
     // Replicate poll
     const prediction = await replicate().predictions.get(state.pending.jobId);
     const status = prediction.status as string;
+
+    // Hero stage on Replicate (google/nano-banana) — output is an image URL.
+    if (state.stage === "hero") {
+      if (status === "failed" || status === "canceled") {
+        const errMsg = prediction.error ? String(prediction.error) : "unknown";
+        console.warn(`[showcase] Replicate hero failed (${errMsg}), falling back to FAL`);
+        state.pending = undefined;
+        try {
+          const { request_id } = await falLib.submit(FAL_HERO_ENDPOINT, {
+            prompt: buildHeroPrompt(state.inputs),
+            image_urls: [state.inputs.productImageUrl],
+            num_images: 1,
+            output_format: "jpeg",
+          });
+          state.pending = { provider: "fal", endpoint: FAL_HERO_ENDPOINT, jobId: request_id };
+          state.updatedAt = Date.now();
+          return state;
+        } catch (e) {
+          state.stage = "failed";
+          state.error = `hero fallback failed: ${e instanceof Error ? e.message : e}`;
+          state.updatedAt = Date.now();
+          return state;
+        }
+      }
+      if (status !== "succeeded") {
+        state.updatedAt = Date.now();
+        return state;
+      }
+      const heroOut = prediction.output as string | string[] | null;
+      const heroUrl = typeof heroOut === "string" ? heroOut : Array.isArray(heroOut) ? heroOut[0] : undefined;
+      if (!heroUrl) {
+        state.stage = "failed";
+        state.error = "hero stage returned no image URL";
+        state.updatedAt = Date.now();
+        return state;
+      }
+      state.artifacts.heroImageUrl = heroUrl;
+      state.pending = undefined;
+      state.stage = "animate";
+      await submitAnimate(state, "seedance-1-pro");
+      state.updatedAt = Date.now();
+      return state;
+    }
+
     if (status === "failed" || status === "canceled") {
       // Animate failed — try fallback model once.
       const errMsg = prediction.error ? String(prediction.error) : "unknown";
@@ -186,8 +230,29 @@ export async function advanceShowcase(state: ShowcaseState): Promise<ShowcaseSta
   }
 }
 
+const REPLICATE_HERO_MODEL = "google/nano-banana";
+
 async function submitHero(state: ShowcaseState): Promise<void> {
   const prompt = buildHeroPrompt(state.inputs);
+  // Replicate google/nano-banana = Gemini 2.5 Flash Image (same model as FAL nano-banana/edit).
+  // FAL_KEY in prod is invalid (returns "invalid key credentials"), so Replicate is primary.
+  try {
+    const prediction = await (replicate().predictions.create as (args: {
+      model: string;
+      input: Record<string, unknown>;
+    }) => Promise<{ id: string }>)({
+      model: REPLICATE_HERO_MODEL,
+      input: {
+        prompt,
+        image_input: [state.inputs.productImageUrl],
+        output_format: "jpg",
+      },
+    });
+    state.pending = { provider: "replicate", endpoint: REPLICATE_HERO_MODEL, jobId: prediction.id };
+    return;
+  } catch (e) {
+    console.warn("[showcase] Replicate nano-banana failed, falling back to FAL:", e instanceof Error ? e.message : e);
+  }
   const { request_id } = await falLib.submit(FAL_HERO_ENDPOINT, {
     prompt,
     image_urls: [state.inputs.productImageUrl],
