@@ -388,3 +388,51 @@ Scope: frontend pages, RTL Hebrew UX, brand kit, dashboard. Owns
 - Flipped LTR-only affordances: toast moved to `left-4`, `ms-auto` instead
   of `ml-auto`, chevron rotated 180 for RTL, `text-start` table headers.
 - `npx tsc --noEmit` clean.
+
+### Step 2 — Public landing at `/` ✅
+- Rewrote `app/page.tsx` in clean Hebrew RTL: minimalist IceCartel-style
+  pill badge, RTL gradient (`bg-gradient-to-l`), single CTA into `/app`,
+  generic time pressure (no dates, no "GRA"). Swapped the cron feature
+  card for a brand kit card.
+- Dashboard remains at `/app` (was already moved); `/` is the landing.
+
+### Step 3 — Brand kit UI ✅
+- New `lib/brand.ts` (owned): client wrapper over `/api/brand-kit` with
+  `fetchBrandKit` / `saveBrandKit` / `isHex` / `BRAND_FONTS`. Hebrew error
+  messages; a clear notice when Supabase persistence is offline (defaults
+  still apply).
+- New `app/brand/page.tsx` + `/app/brand` re-export shim: store picker,
+  logo URL, primary/secondary color pickers, font select, optional voice
+  id, plus a live ad preview rendering the chosen colors/font/logo.
+- Linked from the dashboard + app shell nav. Consumes the existing
+  server-side `lib/brand-kit.ts` (not modified).
+
+### Step 4 — Per-stage generation preview ✅
+- New `components/GenerationStream.tsx`: reusable, transport-agnostic
+  per-stage preview (numbered stage strip with done/active/failed states
+  + live thumbnail tiles, RTL Hebrew). `live` prop shows a subtle
+  "מתעדכן" pulse while running.
+- Wired into `app/autopilot/page.tsx` for both UGC and showcase. The
+  showcase pipeline previously had no stage strip; it now does. Driven by
+  the existing `ugcState`/`showcaseState` poll loop (the P6 SSE hook
+  `useGenerationStream` remains the streaming transport — see note below)
+  so the pipeline is never executed twice.
+
+### Step 5 — Cost dashboard ✅
+- Translated `app/costs/page.tsx` to clean Hebrew RTL: per-generation
+  cost, estimated total burn, monthly budget bar (editable budget), cost
+  breakdown, and daily-spend chart. Palette unified to black/violet,
+  numeric/budget inputs wrapped in `.ltr-island`.
+
+### Notes / decisions
+- SSE transport (`hooks/useGenerationStream` + `/api/generate/stream`,
+  shipped in P6) re-runs the pipeline server-side from the posted state.
+  The autopilot page already drives a working start/advance poll loop, so
+  the preview is fed from that live state rather than the hook to avoid a
+  double-run. `GenerationStream` is compatible with either source if a
+  future flow wants the streamed path.
+- `npx tsc --noEmit` clean; `npm run build` passes (all pages + `/brand`
+  + `/app/brand` routes registered).
+- Verification limited to typecheck + build: the container has no outbound
+  network policy for the model hosts (see Phase 9 blocker), so live
+  generation flows were not exercised end-to-end.
