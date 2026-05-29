@@ -1,18 +1,12 @@
-// Three-tier stitch: FAL ffmpeg-api/compose → Replicate ffmpeg-concat → local
-// ffmpeg-static + Vercel Blob. The FAL endpoint is gated on some accounts
-// (returns Unauthorized), so we fall through. Each tier returns a public MP4
-// URL the caller can hand straight to the player.
-import { fal } from "@fal-ai/client";
+// Two-tier stitch: Replicate ffmpeg-concat → local ffmpeg-static + Vercel Blob.
+// FAL tier was dropped in Phase 9 (FAL_KEY revoked). Each tier returns a
+// public MP4 URL the caller can hand straight to the player.
 import Replicate from "replicate";
 import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-const FAL_KEY = process.env.FAL_KEY;
-if (FAL_KEY) fal.config({ credentials: FAL_KEY });
-
-const FAL_ENDPOINT = "fal-ai/ffmpeg-api/compose";
 // Replicate concat model. Accepts a list of mp4 urls and returns a concatenated
 // mp4. If the account doesn't have access to this specific slug we fall
 // through to the ffmpeg-static tier.
@@ -20,13 +14,13 @@ const REPLICATE_CONCAT_MODEL = "lucataco/ffmpeg-concat";
 
 export interface StitchInput {
   urls: string[];
-  /** Per-clip duration override (seconds). Only used by the FAL tier. */
+  /** Per-clip duration override (seconds). Retained for API compatibility — unused now. */
   clipSeconds?: number;
 }
 
 export interface StitchTrace {
   /** Which tier produced the final URL. */
-  tier: "fal" | "replicate" | "ffmpeg-static";
+  tier: "replicate" | "ffmpeg-static";
   /** Errors collected from earlier tiers — useful for debugging in /api/stitch. */
   attempts: { tier: string; error: string }[];
 }
@@ -44,27 +38,10 @@ export async function stitchVideos(input: StitchInput): Promise<string> {
 export async function stitchVideosWithTrace(input: StitchInput): Promise<StitchResult> {
   if (!input.urls || input.urls.length === 0) throw new Error("no urls to stitch");
   if (input.urls.length === 1) {
-    return { url: input.urls[0], trace: { tier: "fal", attempts: [] } };
+    return { url: input.urls[0], trace: { tier: "ffmpeg-static", attempts: [] } };
   }
 
   const attempts: { tier: string; error: string }[] = [];
-
-  if (FAL_KEY) {
-    try {
-      const url = await stitchViaFal(input);
-      return { url, trace: { tier: "fal", attempts } };
-    } catch (e) {
-      const msg = errMsg(e);
-      attempts.push({ tier: "fal", error: msg });
-      if (!isFalAuthError(e)) {
-        console.warn("[stitch] FAL failed with non-auth error, falling through:", msg);
-      } else {
-        console.warn("[stitch] FAL gated (Unauthorized), falling through to Replicate");
-      }
-    }
-  } else {
-    attempts.push({ tier: "fal", error: "FAL_KEY not set" });
-  }
 
   if (process.env.REPLICATE_API_TOKEN) {
     try {
@@ -91,27 +68,7 @@ export async function stitchVideosWithTrace(input: StitchInput): Promise<StitchR
   }
 }
 
-// ---- Tier 1: FAL ffmpeg-api/compose ---------------------------------------
-
-async function stitchViaFal(input: StitchInput): Promise<string> {
-  if (!FAL_KEY) throw new Error("FAL_KEY not set");
-  const clipSec = input.clipSeconds ?? 8;
-  const clipMs = clipSec * 1000;
-  const keyframes = input.urls.map((url, i) => ({
-    timestamp: i * clipMs,
-    url,
-    duration: clipMs,
-  }));
-  const tracks = [{ id: "main", type: "video", keyframes }];
-  const result = await fal.subscribe(FAL_ENDPOINT, { input: { tracks }, logs: false });
-  const data = (result as { data?: Record<string, unknown> }).data || {};
-  const video = data.video as { url?: string } | undefined;
-  const url = video?.url || (data.url as string | undefined);
-  if (!url) throw new Error("FAL compose returned no video URL");
-  return url;
-}
-
-// ---- Tier 2: Replicate lucataco/ffmpeg-concat -----------------------------
+// ---- Tier 1: Replicate lucataco/ffmpeg-concat -----------------------------
 
 async function stitchViaReplicate(urls: string[]): Promise<string> {
   const replicate = new Replicate({ auth: process.env.REPLICATE_API_TOKEN });
@@ -147,7 +104,7 @@ function pickReplicateUrl(output: unknown): string | undefined {
   return undefined;
 }
 
-// ---- Tier 3: ffmpeg-static + Vercel Blob ----------------------------------
+// ---- Tier 2: ffmpeg-static + Vercel Blob ----------------------------------
 
 async function stitchViaFfmpegStatic(urls: string[]): Promise<string> {
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
@@ -230,11 +187,6 @@ function runFfmpeg(bin: string, args: string[]): Promise<void> {
 }
 
 // ---- helpers ---------------------------------------------------------------
-
-function isFalAuthError(e: unknown): boolean {
-  const msg = errMsg(e).toLowerCase();
-  return /unauthorized|cannot access application|forbidden|403|401/.test(msg);
-}
 
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
