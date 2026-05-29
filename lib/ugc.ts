@@ -161,7 +161,7 @@ export interface UgcState {
    * sync/lipsync-2, 2 = FAL sync-lipsync/v2, 3 = Replicate cjwbw/wav2lip).
    * Bumped automatically when a tier fails at submit or poll time.
    */
-  lipsyncTier?: 1 | 2 | 3;
+  lipsyncTier?: 1 | 2;
   /** Virality score (0-100) once the gate has run, plus any reasons. */
   viralityScore?: number;
   viralityReasons?: string[];
@@ -209,8 +209,8 @@ export async function advanceUgc(state: UgcState): Promise<UgcState> {
     // tearing down the whole pipeline — that's the whole point of the chain.
     if (state.stage === "lipsync") {
       const currentTier = state.lipsyncTier ?? 1;
-      if (currentTier < 3) {
-        const nextTier = (currentTier + 1) as 2 | 3;
+      if (currentTier < 2) {
+        const nextTier = 2 as const;
         console.warn(
           `[ugc] lipsync tier ${currentTier} poll failed (${job.error || "unknown"}); falling through to tier ${nextTier}`
         );
@@ -221,20 +221,6 @@ export async function advanceUgc(state: UgcState): Promise<UgcState> {
           state.updatedAt = Date.now();
           return state;
         } catch (e) {
-          // Submit-side failure on next tier — keep falling through.
-          if (nextTier < 3) {
-            try {
-              await submitLipsyncTier(state, 3);
-              state.lipsyncTier = 3;
-              state.updatedAt = Date.now();
-              return state;
-            } catch (e2) {
-              state.stage = "failed";
-              state.error = e2 instanceof Error ? e2.message : String(e2);
-              state.updatedAt = Date.now();
-              return state;
-            }
-          }
           state.stage = "failed";
           state.error = e instanceof Error ? e.message : String(e);
           state.updatedAt = Date.now();
@@ -541,11 +527,14 @@ async function submitStage(
  * walk forward through the fallback chain. The poll-side fallback is
  * handled in advanceUgc.
  */
-async function submitLipsyncTier(state: UgcState, tier: 1 | 2 | 3): Promise<void> {
+async function submitLipsyncTier(state: UgcState, tier: 1 | 2): Promise<void> {
   const video = state.artifacts.rawVideoUrl;
   const audio = state.artifacts.audioUrl;
   if (!video || !audio) throw new Error("lipsync stage: missing video or audio");
 
+  // Phase 9: FAL lipsync is dropped entirely (FAL_KEY revoked). Chain is now
+  // Replicate sync/lipsync-2 (tier 1) → Replicate cjwbw/wav2lip (tier 2).
+  // The historic tier 3 is retired; we keep the type to avoid client churn.
   if (tier === 1) {
     try {
       const prediction = await (replicate().predictions.create as (args: {
@@ -560,33 +549,14 @@ async function submitLipsyncTier(state: UgcState, tier: 1 | 2 | 3): Promise<void
       return;
     } catch (e) {
       console.warn(
-        "[ugc] replicate sync/lipsync-2 submit failed, falling back to fal sync-lipsync v2:",
+        "[ugc] replicate sync/lipsync-2 submit failed, falling back to wav2lip:",
         e instanceof Error ? e.message : e
       );
       return submitLipsyncTier(state, 2);
     }
   }
 
-  if (tier === 2) {
-    try {
-      const { request_id } = await falLib.submit(FAL.lipsync, {
-        video_url: video,
-        audio_url: audio,
-        sync_mode: "cut_off",
-      });
-      state.pending = { endpoint: FAL.lipsync, jobId: request_id, provider: "fal" };
-      state.lipsyncTier = 2;
-      return;
-    } catch (e) {
-      console.warn(
-        "[ugc] fal sync-lipsync v2 submit failed, falling back to replicate cjwbw/wav2lip:",
-        e instanceof Error ? e.message : e
-      );
-      return submitLipsyncTier(state, 3);
-    }
-  }
-
-  // tier 3 — last resort. wav2lip takes { face, audio }.
+  // tier 2 (was 3) — wav2lip last resort. Takes { face, audio }.
   const prediction = await (replicate().predictions.create as (args: {
     model: `${string}/${string}`;
     input: Record<string, unknown>;
@@ -595,7 +565,7 @@ async function submitLipsyncTier(state: UgcState, tier: 1 | 2 | 3): Promise<void
     input: { face: video, audio },
   });
   state.pending = { endpoint: REPLICATE_LIPSYNC_LASTRESORT, jobId: prediction.id, provider: "replicate" };
-  state.lipsyncTier = 3;
+  state.lipsyncTier = 2;
 }
 
 interface PolledJob {
