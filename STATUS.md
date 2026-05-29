@@ -366,3 +366,25 @@ What was tested
 - Brand kit logo overlay (8% width, bottom-right 24px) runs as part of the same `filter_complex`.
 - Legacy chain remains the default; existing callers untouched.
 - `npx tsc --noEmit` clean; `npm run build` passes.
+
+---
+
+## Phase UX-RTL — Terminal 4 (branch `feat/ux-rtl`)
+
+Scope: frontend pages, RTL Hebrew UX, brand kit, dashboard. Owns
+`app/**/page.tsx`, `app/autopilot/**`, `app/globals.css`, `app/layout.tsx`,
+`components/**`, `lib/brand.ts`. Does NOT touch Terminal 1/2/3 libs or
+`app/api/**`.
+
+### Step 1 — Hebrew-first RTL polish ✅
+- Translated to clean Hebrew RTL: app shell (`app/app/layout.tsx`),
+  dashboard (`app/app/page.tsx`), `generate`, `spy`, `launch`, `library`,
+  `drafts`. Previously only `autopilot` was Hebrew while every other page
+  was English inside an `dir="rtl"` document (LTR leak).
+- Removed em-dashes from copy, wrapped URLs / IDs / model slugs in
+  `.ltr-island` so bidi stays correct, localized dates to `he-IL`, and
+  added Hebrew label maps for Meta objectives + spy score dimensions.
+- Unified palette toward black + violet (was a mix of zinc/gray/indigo/blue).
+- Flipped LTR-only affordances: toast moved to `left-4`, `ms-auto` instead
+  of `ml-auto`, chevron rotated 180 for RTL, `text-start` table headers.
+- `npx tsc --noEmit` clean.
