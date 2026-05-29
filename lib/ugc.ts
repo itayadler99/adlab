@@ -46,6 +46,11 @@ const REPLICATE_ANIMATE_PRIMARY = "google/veo-3-fast" as const;
 // Phase 9 TTS: direct ElevenLabs (if ELEVENLABS_API_KEY) → Replicate xtts-v2 →
 // FAL eleven-v3 (only if FAL_KEY ever rotates back to working).
 const REPLICATE_TTS_FALLBACK = "lucataco/xtts-v2" as const;
+
+// Phase 9 actor (t2i): Replicate flux-1.1-pro-ultra primary, FAL flux-pro fallback.
+const REPLICATE_ACTOR_PRIMARY = "black-forest-labs/flux-1.1-pro-ultra" as const;
+// Phase 9 composite (i2i edit): Replicate google/nano-banana primary, FAL nano-banana fallback.
+const REPLICATE_COMPOSITE_PRIMARY = "google/nano-banana" as const;
 const ELEVENLABS_DIRECT_VOICE_DEFAULTS = {
   stability: 0.5,
   similarity_boost: 0.75,
@@ -369,9 +374,32 @@ async function submitStage(
           );
         }
       }
+      // Phase 9 primary: Replicate flux-1.1-pro-ultra. FAL flux-pro is fallback.
+      const actorPrompt = buildActorPrompt(ctx);
+      try {
+        const prediction = await (replicate().predictions.create as (args: {
+          model: `${string}/${string}`;
+          input: Record<string, unknown>;
+        }) => Promise<{ id: string }>)({
+          model: REPLICATE_ACTOR_PRIMARY,
+          input: {
+            prompt: actorPrompt,
+            aspect_ratio: "9:16",
+            output_format: "jpg",
+            safety_tolerance: 5,
+          },
+        });
+        state.pending = { endpoint: REPLICATE_ACTOR_PRIMARY, jobId: prediction.id, provider: "replicate" };
+        return;
+      } catch (e) {
+        console.warn(
+          "[ugc] replicate flux-1.1-pro-ultra submit failed, falling back to FAL flux-pro:",
+          e instanceof Error ? e.message : e
+        );
+      }
       endpoint = FAL.actor;
       input = {
-        prompt: buildActorPrompt(ctx),
+        prompt: actorPrompt,
         aspect_ratio: "9:16",
         num_images: 1,
         safety_tolerance: "5",
@@ -381,7 +409,6 @@ async function submitStage(
     }
     case "composite": {
       if (!state.artifacts.actorImageUrl) throw new Error("composite stage: missing actorImageUrl");
-      endpoint = FAL.composite;
       // On the first submission, compositeAttempts is undefined → seed to 1.
       // The advance loop bumps it to 2 before resubmitting on retry.
       if (state.compositeAttempts === undefined) state.compositeAttempts = 1;
@@ -389,6 +416,29 @@ async function submitStage(
       const prompt = isRetry
         ? buildCompositeRetryPrompt(ctx, opts.compositeRetryReasons || [])
         : buildCompositePrompt(ctx);
+      // Phase 9 primary: Replicate google/nano-banana (Gemini 2.5 Flash Image).
+      // FAL nano-banana stays as fallback.
+      try {
+        const prediction = await (replicate().predictions.create as (args: {
+          model: `${string}/${string}`;
+          input: Record<string, unknown>;
+        }) => Promise<{ id: string }>)({
+          model: REPLICATE_COMPOSITE_PRIMARY,
+          input: {
+            prompt,
+            image_input: [state.artifacts.actorImageUrl, state.inputs.productImageUrl],
+            output_format: "jpg",
+          },
+        });
+        state.pending = { endpoint: REPLICATE_COMPOSITE_PRIMARY, jobId: prediction.id, provider: "replicate" };
+        return;
+      } catch (e) {
+        console.warn(
+          "[ugc] replicate google/nano-banana composite submit failed, falling back to FAL:",
+          e instanceof Error ? e.message : e
+        );
+      }
+      endpoint = FAL.composite;
       input = {
         prompt,
         image_urls: [state.artifacts.actorImageUrl, state.inputs.productImageUrl],
@@ -600,11 +650,13 @@ async function pollReplicateJob(jobId: string): Promise<PolledJob> {
     }
   }
   const isAudio = typeof firstUrl === "string" && /\.(mp3|wav|m4a|ogg)(\?|$)/i.test(firstUrl);
+  const isImage = typeof firstUrl === "string" && /\.(jpe?g|png|webp)(\?|$)/i.test(firstUrl);
 
   return {
     status: mapped,
-    videoUrl: isAudio ? undefined : firstUrl,
+    videoUrl: !isAudio && !isImage ? firstUrl : undefined,
     audioUrl: isAudio ? firstUrl : undefined,
+    imageUrl: isImage ? firstUrl : undefined,
     error: prediction.error ? String(prediction.error) : undefined,
   };
 }
