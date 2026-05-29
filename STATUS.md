@@ -392,3 +392,52 @@ blocked by the env network allowlist (see BLOCKERS.md), so verification here is
   (was calling `.map` on a non-array and passing an id[] where a string id
   was expected).
 - `tsc --noEmit` clean.
+
+### Step 2 — check-winners hardening + kill rule ✅
+- `app/api/cron/check-winners/route.ts`: the scan was dead (iterated the
+  `{data}` envelope as if it were an array). Rewritten to read lifetime + 7d +
+  30d per campaign, decide ROAS on lifetime (30d/7d fallback), and webhook-alert
+  winners with ROAS > 3.
+- Implements the **kill rule**: 0 purchases lifetime + spend > ₪200 (account
+  currency). Alert-only by default; `META_AUTO_KILL=1` also pauses via
+  `setCampaignStatus`. Only acts on ACTIVE campaigns. Thresholds overridable
+  (`WINNER_ROAS_THRESHOLD`, `KILL_SPEND_THRESHOLD`).
+- Auth accepts Vercel-native `Authorization: Bearer <CRON_SECRET>` and `?secret=`.
+- `lib/meta.ts`: added `setCampaignStatus(id, status)`.
+
+### Step 3 — A/B launcher → PAUSED ✅
+- `app/api/abtest/route.ts`: campaign/adset/ad were created ACTIVE — violated
+  the ironclad "all campaigns PAUSED" rule. Now PAUSED (owner activates). When
+  `pixel_id` is supplied the adsets optimize for PURCHASE; bid strategy stays
+  `LOWEST_COST_WITHOUT_CAP`.
+- `app/api/cron/check-ab-winners/route.ts`: added a zero-spend guard so a test
+  isn't decided (premature tie) before the owner activates and spend lands.
+
+### Step 4 — headline variants ✅
+- New `POST /api/launch/headlines`: 3 Hebrew variants (benefit/urgency/curiosity)
+  via `writeHeadlines`, with a defensive sanitize (em/en dash → comma) and a
+  specific-date warning flag.
+- `app/api/launch/route.ts`: auto-generates 3 headlines when no message is
+  supplied, uses the first as primary text, returns all 3.
+
+### Step 5 — multi-store + verification ✅
+- `lib/stores.ts`: added `montier_ww` (Montier WW). All 5 stores
+  (Montier US / Sneakers / Studio / Treyzer / Montier WW) now resolve through
+  `/api/stores` (the dropdown feed; UI itself is Terminal 4's `page.tsx`).
+  Shows `configured:false` until `META_AD_ACCOUNT_MONTIER_WW` is set.
+- `vercel.json`: scheduled `/api/cron/learn` daily 06:00 UTC (was unscheduled).
+
+### Verification
+- `npx tsc --noEmit` clean across all steps.
+- `npm run build` passes; all new routes registered
+  (`/api/launch/headlines`, hardened `/api/cron/check-winners`, etc.).
+- Live Meta verification NOT run — env network allowlist blocks
+  `graph.facebook.com` (see BLOCKERS.md). Gate is typecheck + build + review.
+
+### Meta-rule compliance recap
+- Bid strategy: `LOWEST_COST_WITHOUT_CAP` everywhere (never Bid Cap) — unchanged
+  default in `createAdset`, confirmed in the A/B path.
+- All campaigns created PAUSED (launch + A/B).
+- Always read lifetime + 7d + 30d (`date_preset=maximum`/`last_7d`/`last_30d`).
+- Kill rule = 0 purchases lifetime + spend > ₪200, with learning-phase context
+  (daysRunning in the alert) and opt-in auto-pause.
