@@ -50,17 +50,17 @@ export default function CostsDashboard() {
       : 1;
 
   return (
-    <main className="min-h-screen bg-gray-950 text-white p-6">
+    <main className="min-h-screen bg-black text-white p-6">
       <div className="max-w-4xl mx-auto">
-        <h1 className="text-3xl font-bold mb-2">Cost Dashboard</h1>
-        <p className="text-gray-400 mb-8">Estimated spend based on generation activity</p>
+        <h1 className="text-3xl font-bold mb-2">לוח עלויות</h1>
+        <p className="text-gray-400 mb-8">הוצאה משוערת לפי פעילות ההפקה</p>
 
         {loading && (
-          <div className="text-gray-400 animate-pulse">Loading cost data…</div>
+          <div className="text-gray-400 animate-pulse">טוען נתוני עלויות</div>
         )}
         {error && (
           <div className="bg-red-900/40 border border-red-700 rounded-lg p-4 text-red-300">
-            Error: {error}
+            שגיאה: {error}
           </div>
         )}
 
@@ -69,37 +69,37 @@ export default function CostsDashboard() {
             {/* Stat Cards */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
               <StatCard
-                label="Total Generations"
+                label="סך ההפקות"
                 value={String(data.totalGenerations)}
-                sub="all time"
+                sub="מאז ומתמיד"
               />
               <StatCard
-                label="Est. Total Burn"
+                label="הוצאה כוללת (משוערת)"
                 value={`$${data.totalBurn.toFixed(2)}`}
-                sub="all time"
+                sub="מאז ומתמיד"
               />
               <StatCard
-                label="This Month"
+                label="החודש"
                 value={`$${data.monthlyBurn.toFixed(2)}`}
-                sub={`of $${effectiveBudget} budget`}
+                sub={`מתוך תקציב של $${effectiveBudget}`}
               />
               <StatCard
-                label="Cost per Gen"
+                label="עלות להפקה"
                 value={`$${data.perGenerationEstimate.toFixed(4)}`}
-                sub="video + script"
+                sub="וידאו ותסריט"
               />
             </div>
 
             {/* Monthly Budget Bar */}
             <section className="bg-gray-900 rounded-2xl p-6 mb-8 border border-gray-800">
               <div className="flex items-center justify-between mb-3">
-                <h2 className="text-lg font-semibold">Monthly Budget</h2>
+                <h2 className="text-lg font-semibold">תקציב חודשי</h2>
                 <div className="flex items-center gap-2">
-                  <span className="text-sm text-gray-400">Budget ($):</span>
+                  <span className="text-sm text-gray-400">תקציב ($):</span>
                   <input
                     type="number"
                     min="1"
-                    className="w-24 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-sm text-white focus:outline-none focus:border-indigo-500"
+                    className="w-24 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-sm text-white focus:outline-none focus:border-violet-500 ltr-island"
                     placeholder={String(data.monthlyBudget)}
                     value={budget}
                     onChange={(e) => {
@@ -118,7 +118,7 @@ export default function CostsDashboard() {
               </div>
               <div className="flex justify-between mt-2 text-sm">
                 <span className="text-gray-400">
-                  ${data.monthlyBurn.toFixed(2)} used
+                  ${data.monthlyBurn.toFixed(2)} נוצלו
                 </span>
                 <span
                   className={`font-semibold ${
@@ -131,36 +131,36 @@ export default function CostsDashboard() {
                 >
                   {effectivePct}%
                 </span>
-                <span className="text-gray-400">${effectiveBudget} budget</span>
+                <span className="text-gray-400">תקציב ${effectiveBudget}</span>
               </div>
             </section>
 
             {/* Cost Breakdown */}
             <section className="bg-gray-900 rounded-2xl p-6 mb-8 border border-gray-800">
-              <h2 className="text-lg font-semibold mb-4">Cost Breakdown (per generation)</h2>
+              <h2 className="text-lg font-semibold mb-4">פירוט עלות (להפקה)</h2>
               <div className="space-y-3">
                 <CostRow
-                  label="Video generation (Replicate)"
+                  label="הפקת וידאו (Replicate)"
                   cost={data.costs.videoPerGen}
                   pct={(data.costs.videoPerGen / data.perGenerationEstimate) * 100}
-                  color="bg-indigo-500"
+                  color="bg-violet-500"
                 />
                 <CostRow
-                  label="Script generation (Claude)"
+                  label="כתיבת תסריט (Claude)"
                   cost={data.costs.scriptPerGen}
                   pct={(data.costs.scriptPerGen / data.perGenerationEstimate) * 100}
-                  color="bg-violet-500"
+                  color="bg-fuchsia-500"
                 />
               </div>
               <p className="text-xs text-gray-500 mt-4">
-                * Estimates based on typical model pricing. Actual costs may vary.
+                האומדנים מבוססים על תמחור מקובל של המודלים. העלות בפועל עשויה להשתנות.
               </p>
             </section>
 
             {/* Daily Costs Chart */}
             {data.dailyCosts.length > 0 && (
               <section className="bg-gray-900 rounded-2xl p-6 border border-gray-800">
-                <h2 className="text-lg font-semibold mb-4">Daily Spend (last {data.dailyCosts.length} days)</h2>
+                <h2 className="text-lg font-semibold mb-4">הוצאה יומית ({data.dailyCosts.length} ימים אחרונים)</h2>
                 <div className="flex items-end gap-1 h-40">
                   {data.dailyCosts.slice(-30).map((d) => {
                     const heightPct = (d.cost / maxDailyCost) * 100;
@@ -170,7 +170,7 @@ export default function CostsDashboard() {
                         className="flex-1 flex flex-col items-center gap-1 group relative"
                       >
                         <div
-                          className="w-full bg-indigo-500 rounded-t hover:bg-indigo-400 transition-colors cursor-default"
+                          className="w-full bg-violet-500 rounded-t hover:bg-violet-400 transition-colors cursor-default"
                           style={{ height: `${Math.max(heightPct, 2)}%` }}
                         />
                         <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-gray-700 text-xs text-white px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none z-10">
@@ -204,8 +204,8 @@ function StatCard({
 }) {
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4">
-      <p className="text-xs text-gray-400 uppercase tracking-wide mb-1">{label}</p>
-      <p className="text-2xl font-bold text-white">{value}</p>
+      <p className="text-xs text-gray-400 tracking-wide mb-1">{label}</p>
+      <p className="text-2xl font-bold text-white ltr-island text-start">{value}</p>
       <p className="text-xs text-gray-500 mt-1">{sub}</p>
     </div>
   );
