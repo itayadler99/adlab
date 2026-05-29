@@ -28,6 +28,7 @@ export async function POST(req: NextRequest) {
       page_id,
       link,
       thumbnail_url,
+      pixel_id,
     } = body;
 
     if (!script || !product_id || !page_id || !link) {
@@ -56,7 +57,7 @@ export async function POST(req: NextRequest) {
       video_job_b: jobB.id,
       status: "generating",
       compare_after: compareAfter,
-      meta: { daily_budget, page_id, link, thumbnail_url },
+      meta: { daily_budget, page_id, link, thumbnail_url, pixel_id },
     });
 
     launchWhenReady(test.id, jobA.id, jobB.id, ma, mb, {
@@ -64,6 +65,7 @@ export async function POST(req: NextRequest) {
       daily_budget,
       link,
       thumbnail_url,
+      pixel_id,
     }).catch(console.error);
 
     return NextResponse.json({ id: test.id, status: "generating" });
@@ -90,7 +92,7 @@ async function launchWhenReady(
   jobIdB: string,
   modelA: VideoModel,
   modelB: VideoModel,
-  opts: { page_id: string; daily_budget: number; link: string; thumbnail_url?: string }
+  opts: { page_id: string; daily_budget: number; link: string; thumbnail_url?: string; pixel_id?: string }
 ) {
   const [urlA, urlB] = await Promise.all([
     pollUntilDone(jobIdA, modelA),
@@ -103,10 +105,13 @@ async function launchWhenReady(
     status: "launching",
   });
 
+  // Itay's ironclad rule: all Meta campaigns are created PAUSED. The owner
+  // activates both adsets in Ads Manager; check-ab-winners then waits until
+  // real spend lands before declaring a winner (see the zero-spend guard).
   const campaign = await createCampaign({
     name: `AB Test ${testId.slice(0, 8)}`,
     objective: "OUTCOME_SALES",
-    status: "ACTIVE",
+    status: "PAUSED",
   });
   const campaignId = campaign.id;
 
@@ -129,7 +134,7 @@ async function setupAdset(
   campaignId: string,
   videoUrl: string,
   modelName: string,
-  opts: { page_id: string; daily_budget: number; link: string; thumbnail_url?: string }
+  opts: { page_id: string; daily_budget: number; link: string; thumbnail_url?: string; pixel_id?: string }
 ) {
   const video = await uploadVideoFromUrl(videoUrl, `abtest-${modelName}`);
   const creative = await createVideoCreative({
@@ -140,18 +145,23 @@ async function setupAdset(
     message: "",
     link: opts.link,
   });
+  // Optimize for purchases when a pixel is supplied (real ROAS A/B); otherwise
+  // createAdset falls back to LINK_CLICKS. Bid strategy stays the default
+  // LOWEST_COST_WITHOUT_CAP (never Bid Cap).
   const adset = await createAdset({
     name: `Adset-${modelName}`,
     campaign_id: campaignId,
     daily_budget: opts.daily_budget,
     page_id: opts.page_id,
-    status: "ACTIVE",
+    pixel_id: opts.pixel_id,
+    custom_event_type: opts.pixel_id ? "PURCHASE" : undefined,
+    status: "PAUSED",
   });
   const ad = await createAd({
     name: `Ad-${modelName}`,
     adset_id: adset.id,
     creative_id: creative.id,
-    status: "ACTIVE",
+    status: "PAUSED",
   });
   return { adsetId: adset.id, adId: ad.id };
 }

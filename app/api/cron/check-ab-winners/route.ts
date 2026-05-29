@@ -39,6 +39,15 @@ export async function GET(req: NextRequest) {
         getAdsetInsights(test.adset_id_b, since, until),
       ]);
 
+      // Campaigns launch PAUSED (ironclad rule); the owner activates them in
+      // Ads Manager. Until real spend lands on both adsets there's nothing to
+      // compare — leave the test pending and re-check on the next run rather
+      // than declaring a premature tie.
+      if (extractSpend(insightsA) <= 0 && extractSpend(insightsB) <= 0) {
+        results.push({ id: test.id, error: "no spend yet — still pending" });
+        continue;
+      }
+
       const roasA = extractRoas(insightsA);
       const roasB = extractRoas(insightsB);
 
@@ -63,6 +72,13 @@ export async function GET(req: NextRequest) {
   }
 
   return NextResponse.json({ processed: results.length, results });
+}
+
+function extractSpend(insights: unknown): number {
+  const data = (insights as { data?: unknown[] })?.data;
+  if (!data || !Array.isArray(data) || data.length === 0) return 0;
+  const row = data[0] as Record<string, unknown>;
+  return parseFloat(String(row.spend ?? "0")) || 0;
 }
 
 function extractRoas(insights: unknown): number {
