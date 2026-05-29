@@ -205,7 +205,9 @@ function StatCard({
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4">
       <p className="text-xs text-gray-400 tracking-wide mb-1">{label}</p>
-      <p className="text-2xl font-bold text-white ltr-island text-start">{value}</p>
+      <p className="text-2xl font-bold text-white">
+        <span className="ltr-island inline-block">{value}</span>
+      </p>
       <p className="text-xs text-gray-500 mt-1">{sub}</p>
     </div>
   );
@@ -226,7 +228,7 @@ function CostRow({
     <div>
       <div className="flex justify-between text-sm mb-1">
         <span className="text-gray-300">{label}</span>
-        <span className="text-white font-mono">${cost.toFixed(4)}</span>
+        <span className="text-white font-mono ltr-island inline-block">${cost.toFixed(4)}</span>
       </div>
       <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
         <div
