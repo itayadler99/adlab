@@ -43,6 +43,52 @@ const REPLICATE_LIPSYNC_LASTRESORT = "cjwbw/wav2lip" as const;
 // the key is rotated later.
 const REPLICATE_ANIMATE_PRIMARY = "google/veo-3-fast" as const;
 
+// Phase 9 TTS: direct ElevenLabs (if ELEVENLABS_API_KEY) → Replicate xtts-v2 →
+// FAL eleven-v3 (only if FAL_KEY ever rotates back to working).
+const REPLICATE_TTS_FALLBACK = "lucataco/xtts-v2" as const;
+const ELEVENLABS_DIRECT_VOICE_DEFAULTS = {
+  stability: 0.5,
+  similarity_boost: 0.75,
+  style: 0.4,
+  use_speaker_boost: true,
+} as const;
+
+/**
+ * Direct ElevenLabs TTS — POST /v1/text-to-speech/{voice_id} returns raw audio
+ * bytes. We upload to Vercel Blob and return the public URL so the rest of the
+ * pipeline can keep treating audio as a URL.
+ */
+async function synthElevenLabsDirect(args: {
+  text: string;
+  voiceId: string;
+  modelId?: string;
+}): Promise<string | null> {
+  const apiKey = process.env.ELEVENLABS_API_KEY;
+  if (!apiKey) return null;
+  const url = `https://api.elevenlabs.io/v1/text-to-speech/${args.voiceId}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "xi-api-key": apiKey,
+      "Content-Type": "application/json",
+      Accept: "audio/mpeg",
+    },
+    body: JSON.stringify({
+      text: args.text,
+      model_id: args.modelId ?? "eleven_v3",
+      voice_settings: ELEVENLABS_DIRECT_VOICE_DEFAULTS,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`elevenlabs ${res.status}: ${await res.text().catch(() => "")}`);
+  }
+  const buf = Buffer.from(await res.arrayBuffer());
+  const { put } = await import("@vercel/blob");
+  const key = `ugc/tts/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp3`;
+  const blob = await put(key, buf, { access: "public", contentType: "audio/mpeg" });
+  return blob.url;
+}
+
 const replicate = () => new Replicate({ auth: process.env.REPLICATE_API_TOKEN });
 
 export type UgcStage =
@@ -404,26 +450,60 @@ async function submitStage(
     }
     case "tts": {
       const voiceId = pickVoiceId(archetype, state.inputs.language || "en");
-      // eleven-v3 takes a nested voice_settings object; turbo-v2.5 takes the
-      // same fields flat. We submit v3 first and fall back to turbo-v2.5 if
-      // v3 rejects (4xx, unsupported voice, account not enabled, etc.).
+      // Phase 9 chain: direct ElevenLabs (eleven_v3) → Replicate xtts-v2 → FAL.
+      // The first two run on working keys; FAL stays only as a last resort for
+      // when FAL_KEY gets rotated.
+      try {
+        const directUrl = await synthElevenLabsDirect({
+          text: state.inputs.script,
+          voiceId,
+        });
+        if (directUrl) {
+          state.artifacts.audioUrl = directUrl;
+          // Short-circuit straight to lipsync — no async job to poll.
+          state.stage = "lipsync";
+          state.pending = undefined;
+          await submitStage(state, {});
+          return;
+        }
+      } catch (e) {
+        console.warn(
+          "[ugc] direct ElevenLabs TTS failed, falling back to Replicate xtts-v2:",
+          e instanceof Error ? e.message : e
+        );
+      }
+      try {
+        const prediction = await (replicate().predictions.create as (args: {
+          model: `${string}/${string}`;
+          input: Record<string, unknown>;
+        }) => Promise<{ id: string }>)({
+          model: REPLICATE_TTS_FALLBACK,
+          input: {
+            text: state.inputs.script,
+            language: state.inputs.language === "he" ? "he" : "en",
+          },
+        });
+        state.pending = { endpoint: REPLICATE_TTS_FALLBACK, jobId: prediction.id, provider: "replicate" };
+        return;
+      } catch (e) {
+        console.warn(
+          "[ugc] replicate xtts-v2 submit failed, falling back to FAL eleven-v3:",
+          e instanceof Error ? e.message : e
+        );
+      }
+      // Last resort: FAL eleven-v3 (only works if FAL_KEY is rotated).
       try {
         const v3Input = {
           text: state.inputs.script,
           voice: voiceId,
-          voice_settings: {
-            stability: 0.5,
-            similarity_boost: 0.75,
-            style: 0.4,
-            use_speaker_boost: true,
-          },
+          voice_settings: ELEVENLABS_DIRECT_VOICE_DEFAULTS,
         };
         const { request_id } = await falLib.submit(FAL.tts, v3Input);
-        state.pending = { endpoint: FAL.tts, jobId: request_id };
+        state.pending = { endpoint: FAL.tts, jobId: request_id, provider: "fal" };
         return;
       } catch (e) {
         console.warn(
-          "[ugc] elevenlabs v3 submit failed, falling back to turbo-v2.5:",
+          "[ugc] FAL eleven-v3 submit failed, last resort FAL turbo-v2.5:",
           e instanceof Error ? e.message : e
         );
       }
@@ -533,22 +613,28 @@ async function pollReplicateJob(jobId: string): Promise<PolledJob> {
   if (s === "succeeded") mapped = "succeeded";
   else if (s === "failed" || s === "canceled") mapped = "failed";
 
-  let videoUrl: string | undefined;
+  // Replicate output can be: string URL, string[] of URLs, or an object with
+  // video/url/audio fields depending on the model. We coerce all of them into
+  // the right slot. xtts-v2 returns a single mp3 URL string for the audio.
+  let firstUrl: string | undefined;
   if (mapped === "succeeded") {
     const out = prediction.output as unknown;
-    if (typeof out === "string") videoUrl = out;
-    else if (Array.isArray(out) && typeof out[0] === "string") videoUrl = out[0];
+    if (typeof out === "string") firstUrl = out;
+    else if (Array.isArray(out) && typeof out[0] === "string") firstUrl = out[0];
     else if (out && typeof out === "object") {
       const obj = out as Record<string, unknown>;
-      if (typeof obj.video === "string") videoUrl = obj.video;
-      else if (typeof obj.url === "string") videoUrl = obj.url;
-      else if (Array.isArray(obj.video) && typeof obj.video[0] === "string") videoUrl = obj.video[0] as string;
+      if (typeof obj.video === "string") firstUrl = obj.video;
+      else if (typeof obj.audio === "string") firstUrl = obj.audio as string;
+      else if (typeof obj.url === "string") firstUrl = obj.url;
+      else if (Array.isArray(obj.video) && typeof obj.video[0] === "string") firstUrl = obj.video[0] as string;
     }
   }
+  const isAudio = typeof firstUrl === "string" && /\.(mp3|wav|m4a|ogg)(\?|$)/i.test(firstUrl);
 
   return {
     status: mapped,
-    videoUrl,
+    videoUrl: isAudio ? undefined : firstUrl,
+    audioUrl: isAudio ? firstUrl : undefined,
     error: prediction.error ? String(prediction.error) : undefined,
   };
 }
