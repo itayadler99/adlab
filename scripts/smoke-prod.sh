@@ -17,9 +17,9 @@ r=$(curl -s $AUTH "$BASE/api/showcase/start" -X POST -H "Content-Type: applicati
   -d '{"productTitle":"Diamond Tennis","productImageUrl":"https://placehold.co/1080x1080.jpg","hook":"glow up"}')
 echo "$r" | jq -e '.stage' || (echo "SHOWCASE FAIL: $r" && exit 1)
 
-echo "== /api/generate =="
-r=$(curl -s $AUTH "$BASE/api/generate" -X POST -H "Content-Type: application/json" \
-  -d '{"prompt":"jewelry box opens"}')
-echo "$r" | jq -e '.id' || (echo "GENERATE FAIL: $r" && exit 1)
+echo "== /api/generate/video =="
+r=$(curl -s $AUTH "$BASE/api/generate/video" -X POST -H "Content-Type: application/json" \
+  -d '{"prompt":"jewelry box opens","model":"veo-3-fast"}')
+echo "$r" | jq -e '.jobId' || (echo "GENERATE FAIL: $r" && exit 1)
 
 echo "ALL GREEN"

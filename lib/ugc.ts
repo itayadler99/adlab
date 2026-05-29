@@ -38,6 +38,11 @@ export const FAL = {
 const REPLICATE_LIPSYNC_PRIMARY = "sync/lipsync-2" as const;
 const REPLICATE_LIPSYNC_LASTRESORT = "cjwbw/wav2lip" as const;
 
+// Phase 9: Replicate Veo 3 Fast (i2v) is the primary animate path now because
+// the production FAL_KEY is revoked. FAL Veo stays as tier-2 fallback in case
+// the key is rotated later.
+const REPLICATE_ANIMATE_PRIMARY = "google/veo-3-fast" as const;
+
 const replicate = () => new Replicate({ auth: process.env.REPLICATE_API_TOKEN });
 
 export type UgcStage =
@@ -362,9 +367,33 @@ async function submitStage(
     }
     case "animate": {
       if (!state.artifacts.compositeImageUrl) throw new Error("animate stage: missing compositeImageUrl");
+      const animatePrompt = buildAnimationPrompt(ctx, state.inputs.script);
+      // Phase 9 primary: Replicate google/veo-3-fast (i2v). Falls back to FAL
+      // Veo 3.1 Fast on any submit error (e.g. rate limit, transient outage).
+      try {
+        const prediction = await (replicate().predictions.create as (args: {
+          model: `${string}/${string}`;
+          input: Record<string, unknown>;
+        }) => Promise<{ id: string }>)({
+          model: REPLICATE_ANIMATE_PRIMARY,
+          input: {
+            prompt: animatePrompt,
+            image: state.artifacts.compositeImageUrl,
+            aspect_ratio: "9:16",
+            duration_seconds: 8,
+          },
+        });
+        state.pending = { endpoint: REPLICATE_ANIMATE_PRIMARY, jobId: prediction.id, provider: "replicate" };
+        return;
+      } catch (e) {
+        console.warn(
+          "[ugc] replicate veo-3-fast submit failed, falling back to FAL veo3.1/fast:",
+          e instanceof Error ? e.message : e
+        );
+      }
       endpoint = FAL.animate;
       input = {
-        prompt: buildAnimationPrompt(ctx, state.inputs.script),
+        prompt: animatePrompt,
         image_url: state.artifacts.compositeImageUrl,
         aspect_ratio: "9:16",
         resolution: "1080p",
