@@ -180,6 +180,14 @@ export async function getAccountCampaignInsights(
   return map;
 }
 
+/** Pause or activate a campaign. Used by the kill-rule guard (opt-in). */
+export async function setCampaignStatus(
+  campaignId: string,
+  status: "ACTIVE" | "PAUSED"
+) {
+  return metaPost(`/${campaignId}`, { status });
+}
+
 export async function createCampaign(opts: {
   name: string;
   objective?: string;
