@@ -12,43 +12,43 @@ const MODEL_OPTIONS: {
   {
     value: "veo-3-fast",
     label: "Veo 3 Fast",
-    description: "Google Veo 3 Fast — recommended default, 8s vertical 1080p.",
+    description: "ברירת המחדל המומלצת. אנכי 1080p, שמונה שניות.",
     available: true,
   },
   {
     value: "veo-3",
     label: "Veo 3",
-    description: "Google Veo 3 — top cinematic quality, 8s.",
+    description: "איכות קולנועית מובילה, שמונה שניות.",
     available: true,
   },
   {
     value: "kling-2.1",
     label: "Kling 2.1",
-    description: "Great for UGC/product, realistic motion, 5-10s.",
+    description: "מצוין לתוכן גולשים ומוצר, תנועה ריאליסטית, חמש עד עשר שניות.",
     available: true,
   },
   {
     value: "hailuo-02",
     label: "Hailuo 02",
-    description: "MiniMax Hailuo 02 — smooth motion, 6-10s.",
+    description: "תנועה חלקה, שש עד עשר שניות.",
     available: true,
   },
   {
     value: "seedance-1.0",
     label: "Seedance 1.0",
-    description: "Bytedance Seedance — fast, good motion.",
+    description: "מהיר עם תנועה טובה.",
     available: true,
   },
   {
     value: "kling-1.6",
     label: "Kling 1.6",
-    description: "Solid cinematic baseline.",
+    description: "בסיס קולנועי יציב.",
     available: true,
   },
   {
     value: "minimax",
-    label: "Minimax Video-01 (legacy)",
-    description: "Fast, low cost, baseline quality.",
+    label: "Minimax Video-01",
+    description: "מהיר, עלות נמוכה, איכות בסיסית.",
     available: true,
   },
 ];
@@ -77,25 +77,25 @@ export default function GeneratePage() {
       const data = await res.json();
       setResult(data);
     } catch {
-      setResult({ error: "Network error" });
+      setResult({ error: "שגיאת רשת" });
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <main className="min-h-screen bg-zinc-950 text-zinc-100 p-8">
+    <main className="min-h-screen bg-black text-white p-8">
       <div className="max-w-2xl mx-auto">
-        <h1 className="text-3xl font-bold mb-2">Generate Video Ad</h1>
-        <p className="text-zinc-400 mb-8">
-          Choose a model and describe your video ad.
+        <h1 className="text-3xl font-bold mb-2">יצירת סרטון פרסומת</h1>
+        <p className="text-white/50 mb-8">
+          בחרו מודל ותארו את הסרטון שתרצו להפיק.
         </p>
 
         <form onSubmit={handleGenerate} className="space-y-6">
           {/* Model selector */}
           <div>
-            <label className="block text-sm font-medium text-zinc-300 mb-3">
-              Video Model
+            <label className="block text-sm font-medium text-white/70 mb-3">
+              מודל וידאו
             </label>
             <div className="grid gap-3">
               {MODEL_OPTIONS.map((opt) => (
@@ -105,9 +105,9 @@ export default function GeneratePage() {
                     "flex items-start gap-3 rounded-lg border p-4 cursor-pointer transition-colors",
                     opt.available
                       ? model === opt.value
-                        ? "border-indigo-500 bg-indigo-950/40"
-                        : "border-zinc-700 hover:border-zinc-500 bg-zinc-900"
-                      : "border-zinc-800 bg-zinc-900/50 opacity-60 cursor-not-allowed",
+                        ? "border-violet-500 bg-violet-950/40"
+                        : "border-white/10 hover:border-white/30 bg-white/5"
+                      : "border-white/10 bg-white/5 opacity-60 cursor-not-allowed",
                   ].join(" ")}
                 >
                   <input
@@ -117,20 +117,20 @@ export default function GeneratePage() {
                     checked={model === opt.value}
                     disabled={!opt.available}
                     onChange={() => opt.available && setModel(opt.value)}
-                    className="mt-1 accent-indigo-500"
+                    className="mt-1 accent-violet-500"
                   />
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="font-medium text-zinc-100">
+                      <span className="font-medium text-white ltr-island">
                         {opt.label}
                       </span>
                       {!opt.available && (
                         <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30">
-                          Coming Soon
+                          בקרוב
                         </span>
                       )}
                     </div>
-                    <p className="text-sm text-zinc-400 mt-0.5">
+                    <p className="text-sm text-white/50 mt-0.5">
                       {opt.description}
                     </p>
                   </div>
@@ -143,26 +143,26 @@ export default function GeneratePage() {
           <div>
             <label
               htmlFor="prompt"
-              className="block text-sm font-medium text-zinc-300 mb-2"
+              className="block text-sm font-medium text-white/70 mb-2"
             >
-              Prompt
+              תיאור הסרטון
             </label>
             <textarea
               id="prompt"
               rows={4}
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Describe the video ad you want to generate…"
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 text-zinc-100 px-4 py-3 text-sm placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+              placeholder="תארו את סרטון הפרסומת שתרצו להפיק"
+              className="w-full rounded-lg border border-white/10 bg-white/5 text-white px-4 py-3 text-sm placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none"
             />
           </div>
 
           <button
             type="submit"
             disabled={loading || !prompt.trim()}
-            className="w-full rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed px-6 py-3 font-semibold text-white transition-colors"
+            className="w-full rounded-lg bg-violet-600 hover:bg-violet-500 disabled:opacity-50 disabled:cursor-not-allowed px-6 py-3 font-semibold text-white transition-colors"
           >
-            {loading ? "Generating…" : "Generate Video"}
+            {loading ? "מפיק" : "הפקת סרטון"}
           </button>
         </form>
 
@@ -178,14 +178,14 @@ export default function GeneratePage() {
           >
             {result.error ? (
               <>
-                <p className="font-semibold mb-1">Error</p>
+                <p className="font-semibold mb-1">שגיאה</p>
                 <p>{result.error}</p>
               </>
             ) : (
               <>
-                <p className="font-semibold mb-1">✅ Job Started</p>
+                <p className="font-semibold mb-1">המשימה החלה</p>
                 <p>
-                  Job ID: <code className="font-mono">{result.jobId}</code>
+                  מזהה משימה: <code className="font-mono ltr-island">{result.jobId}</code>
                 </p>
               </>
             )}

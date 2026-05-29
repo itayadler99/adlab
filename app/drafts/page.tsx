@@ -32,22 +32,22 @@ interface Draft {
 
 const STATUS_CONFIG: Record<DraftStatus, { label: string; color: string; icon: React.ReactNode }> = {
   draft: {
-    label: "Pending Review",
+    label: "ממתין לאישור",
     color: "text-yellow-400 bg-yellow-400/10 border-yellow-400/20",
     icon: <Clock size={14} />,
   },
   approved: {
-    label: "Approved",
+    label: "אושר",
     color: "text-green-400 bg-green-400/10 border-green-400/20",
     icon: <CheckCircle size={14} />,
   },
   rejected: {
-    label: "Rejected",
+    label: "נדחה",
     color: "text-red-400 bg-red-400/10 border-red-400/20",
     icon: <XCircle size={14} />,
   },
   launched: {
-    label: "Launched",
+    label: "הושק",
     color: "text-blue-400 bg-blue-400/10 border-blue-400/20",
     icon: <Rocket size={14} />,
   },
@@ -90,7 +90,7 @@ export default function DraftsPage() {
       const data = await res.json();
       setDrafts(data.drafts ?? []);
     } catch {
-      showToast("Failed to load drafts", "error");
+      showToast("טעינת הטיוטות נכשלה", "error");
     } finally {
       setLoading(false);
     }
@@ -106,11 +106,11 @@ export default function DraftsPage() {
       const res = await fetch(`/api/drafts/${draft.id}/approve`, { method: "POST" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      showToast(`"${draft.title}" approved!`, "success");
+      showToast(`"${draft.title}" אושר`, "success");
       setSelected(data.draft);
       await fetchDrafts();
     } catch (e: unknown) {
-      showToast(e instanceof Error ? e.message : "Approval failed", "error");
+      showToast(e instanceof Error ? e.message : "האישור נכשל", "error");
     } finally {
       setActionLoading(false);
     }
@@ -127,13 +127,13 @@ export default function DraftsPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      showToast(`"${selected.title}" rejected.`, "success");
+      showToast(`"${selected.title}" נדחה`, "success");
       setShowRejectModal(false);
       setRejectReason("");
       setSelected(data.draft);
       await fetchDrafts();
     } catch (e: unknown) {
-      showToast(e instanceof Error ? e.message : "Rejection failed", "error");
+      showToast(e instanceof Error ? e.message : "הדחייה נכשלה", "error");
     } finally {
       setActionLoading(false);
     }
@@ -154,13 +154,13 @@ export default function DraftsPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      showToast(`"${selected.title}" launched to Meta!`, "success");
+      showToast(`"${selected.title}" הושק למטא`, "success");
       setShowLaunchModal(false);
       setLaunchData({ ad_account_id: "", campaign_name: "", budget: "" });
       setSelected(data.draft);
       await fetchDrafts();
     } catch (e: unknown) {
-      showToast(e instanceof Error ? e.message : "Launch failed", "error");
+      showToast(e instanceof Error ? e.message : "ההשקה נכשלה", "error");
     } finally {
       setActionLoading(false);
     }
@@ -176,11 +176,11 @@ export default function DraftsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100">
+    <div className="min-h-screen bg-black text-gray-100">
       {/* Toast */}
       {toast && (
         <div
-          className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium flex items-center gap-2 ${
+          className={`fixed top-4 left-4 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium flex items-center gap-2 ${
             toast.type === "success" ? "bg-green-600" : "bg-red-600"
           }`}
         >
@@ -193,8 +193,8 @@ export default function DraftsPage() {
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h1 className="text-2xl font-bold text-white">Drafts Queue</h1>
-            <p className="text-gray-400 text-sm mt-1">Review and approve ads before launching to Meta</p>
+            <h1 className="text-2xl font-bold text-white">תור הטיוטות</h1>
+            <p className="text-gray-400 text-sm mt-1">בדקו ואשרו פרסומות לפני ההשקה למטא</p>
           </div>
           <div className="flex items-center gap-3">
             <button
@@ -202,14 +202,14 @@ export default function DraftsPage() {
               className="flex items-center gap-2 px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-colors"
             >
               <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
-              Refresh
+              רענון
             </button>
             <Link
-              href="/generate"
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-medium transition-colors"
+              href="/app/generate"
+              className="flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-sm font-medium transition-colors"
             >
               <PlusCircle size={14} />
-              New Ad
+              פרסומת חדשה
             </Link>
           </div>
         </div>
@@ -220,13 +220,13 @@ export default function DraftsPage() {
             <button
               key={s}
               onClick={() => setFilterStatus(s)}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors capitalize ${
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
                 filterStatus === s
                   ? "bg-gray-700 text-white"
                   : "text-gray-400 hover:text-gray-200"
               }`}
             >
-              {s === "all" ? "All" : STATUS_CONFIG[s as DraftStatus].label}{" "}
+              {s === "all" ? "הכל" : STATUS_CONFIG[s as DraftStatus].label}{" "}
               <span className="text-xs opacity-60">({counts[s]})</span>
             </button>
           ))}
@@ -242,16 +242,16 @@ export default function DraftsPage() {
             ) : filtered.length === 0 ? (
               <div className="text-center py-12 text-gray-500">
                 <Clock size={32} className="mx-auto mb-3 opacity-40" />
-                <p>No drafts found</p>
+                <p>לא נמצאו טיוטות</p>
               </div>
             ) : (
               filtered.map((draft) => (
                 <button
                   key={draft.id}
                   onClick={() => setSelected(draft)}
-                  className={`w-full text-left p-4 rounded-xl border transition-all ${
+                  className={`w-full text-start p-4 rounded-xl border transition-all ${
                     selected?.id === draft.id
-                      ? "border-indigo-500 bg-indigo-500/10"
+                      ? "border-violet-500 bg-violet-500/10"
                       : "border-gray-800 bg-gray-900 hover:border-gray-600"
                   }`}
                 >
@@ -262,12 +262,12 @@ export default function DraftsPage() {
                         <p className="text-xs text-gray-500 truncate mt-0.5">{draft.product_title}</p>
                       )}
                     </div>
-                    <ChevronRight size={14} className="text-gray-600 flex-shrink-0 mt-0.5" />
+                    <ChevronRight size={14} className="text-gray-600 flex-shrink-0 mt-0.5 rotate-180" />
                   </div>
                   <div className="flex items-center justify-between mt-2">
                     <StatusBadge status={draft.status} />
                     <span className="text-xs text-gray-600">
-                      {new Date(draft.created_at).toLocaleDateString()}
+                      {new Date(draft.created_at).toLocaleDateString("he-IL")}
                     </span>
                   </div>
                 </button>
@@ -281,7 +281,7 @@ export default function DraftsPage() {
               <div className="h-full flex items-center justify-center text-gray-600 border border-dashed border-gray-800 rounded-xl p-12">
                 <div className="text-center">
                   <Clock size={40} className="mx-auto mb-3 opacity-40" />
-                  <p>Select a draft to review</p>
+                  <p>בחרו טיוטה לבדיקה</p>
                 </div>
               </div>
             ) : (
@@ -300,7 +300,7 @@ export default function DraftsPage() {
                 {/* Video preview */}
                 {selected.video_url && (
                   <div>
-                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">Video</p>
+                    <p className="text-xs font-medium text-gray-500 tracking-wider mb-2">סרטון</p>
                     <video
                       src={selected.video_url}
                       controls
@@ -311,7 +311,7 @@ export default function DraftsPage() {
 
                 {/* Script */}
                 <div>
-                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">Script</p>
+                  <p className="text-xs font-medium text-gray-500 tracking-wider mb-2">תסריט</p>
                   <div className="bg-gray-800 rounded-lg p-4 text-sm text-gray-300 whitespace-pre-wrap max-h-48 overflow-y-auto">
                     {selected.script}
                   </div>
@@ -322,13 +322,13 @@ export default function DraftsPage() {
                   <div className="grid grid-cols-2 gap-3">
                     {selected.campaign_name && (
                       <div className="bg-gray-800 rounded-lg p-3">
-                        <p className="text-xs text-gray-500 mb-1">Campaign Name</p>
+                        <p className="text-xs text-gray-500 mb-1">שם הקמפיין</p>
                         <p className="text-sm font-medium">{selected.campaign_name}</p>
                       </div>
                     )}
                     {selected.budget && (
                       <div className="bg-gray-800 rounded-lg p-3">
-                        <p className="text-xs text-gray-500 mb-1">Daily Budget</p>
+                        <p className="text-xs text-gray-500 mb-1">תקציב יומי</p>
                         <p className="text-sm font-medium">${(selected.budget / 100).toFixed(2)}</p>
                       </div>
                     )}
@@ -338,7 +338,7 @@ export default function DraftsPage() {
                 {/* Rejection reason */}
                 {selected.status === "rejected" && selected.rejection_reason && (
                   <div className="bg-red-900/20 border border-red-800/40 rounded-lg p-4">
-                    <p className="text-xs font-medium text-red-400 uppercase tracking-wider mb-1">Rejection Reason</p>
+                    <p className="text-xs font-medium text-red-400 tracking-wider mb-1">סיבת הדחייה</p>
                     <p className="text-sm text-red-300">{selected.rejection_reason}</p>
                   </div>
                 )}
@@ -352,7 +352,7 @@ export default function DraftsPage() {
                       className="flex items-center gap-2 px-4 py-2.5 bg-green-600 hover:bg-green-500 disabled:opacity-50 rounded-lg text-sm font-medium transition-colors"
                     >
                       <CheckCircle size={16} />
-                      Approve
+                      אישור
                     </button>
                     <button
                       onClick={() => { setShowRejectModal(true); }}
@@ -360,7 +360,7 @@ export default function DraftsPage() {
                       className="flex items-center gap-2 px-4 py-2.5 bg-red-700 hover:bg-red-600 disabled:opacity-50 rounded-lg text-sm font-medium transition-colors"
                     >
                       <XCircle size={16} />
-                      Reject
+                      דחייה
                     </button>
                   </div>
                 )}
@@ -377,13 +377,13 @@ export default function DraftsPage() {
                         setShowLaunchModal(true);
                       }}
                       disabled={actionLoading || !selected.video_url}
-                      className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 rounded-lg text-sm font-medium transition-colors"
+                      className="flex items-center gap-2 px-4 py-2.5 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 rounded-lg text-sm font-medium transition-colors"
                     >
                       <Rocket size={16} />
-                      Launch to Meta
+                      השקה למטא
                     </button>
                     {!selected.video_url && (
-                      <p className="text-xs text-yellow-400">Video required before launching</p>
+                      <p className="text-xs text-yellow-400">נדרש סרטון לפני ההשקה</p>
                     )}
                   </div>
                 )}
@@ -391,8 +391,8 @@ export default function DraftsPage() {
                 {selected.status === "launched" && (
                   <div className="flex items-center gap-2 text-blue-400 text-sm">
                     <Rocket size={16} />
-                    This ad has been launched to Meta Ads.
-                    <Link href="/launch" className="underline hover:text-blue-300">View campaigns →</Link>
+                    הפרסומת הזו הושקה למטא.
+                    <Link href="/app/launch" className="underline hover:text-blue-300">צפייה בקמפיינים</Link>
                   </div>
                 )}
               </div>
@@ -405,12 +405,12 @@ export default function DraftsPage() {
       {showRejectModal && selected && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-md">
-            <h3 className="text-lg font-bold mb-1">Reject Draft</h3>
-            <p className="text-sm text-gray-400 mb-4">Optionally provide a reason for rejecting "{selected.title}"</p>
+            <h3 className="text-lg font-bold mb-1">דחיית טיוטה</h3>
+            <p className="text-sm text-gray-400 mb-4">אפשר לציין סיבה לדחיית "{selected.title}"</p>
             <textarea
               value={rejectReason}
               onChange={(e) => setRejectReason(e.target.value)}
-              placeholder="Rejection reason (optional)…"
+              placeholder="סיבת הדחייה (לא חובה)"
               rows={3}
               className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-red-500 resize-none"
             />
@@ -420,13 +420,13 @@ export default function DraftsPage() {
                 disabled={actionLoading}
                 className="flex-1 py-2.5 bg-red-700 hover:bg-red-600 disabled:opacity-50 rounded-lg text-sm font-medium transition-colors"
               >
-                {actionLoading ? "Rejecting…" : "Confirm Reject"}
+                {actionLoading ? "דוחה" : "אישור הדחייה"}
               </button>
               <button
                 onClick={() => { setShowRejectModal(false); setRejectReason(""); }}
                 className="flex-1 py-2.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm font-medium transition-colors"
               >
-                Cancel
+                ביטול
               </button>
             </div>
           </div>
@@ -437,37 +437,37 @@ export default function DraftsPage() {
       {showLaunchModal && selected && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-md">
-            <h3 className="text-lg font-bold mb-1">Launch to Meta</h3>
-            <p className="text-sm text-gray-400 mb-4">Configure Meta Ads settings for "{selected.title}"</p>
+            <h3 className="text-lg font-bold mb-1">השקה למטא</h3>
+            <p className="text-sm text-gray-400 mb-4">הגדרות מטא לפרסומת "{selected.title}"</p>
             <div className="space-y-3">
               <div>
-                <label className="text-xs text-gray-400 mb-1 block">Ad Account ID</label>
+                <label className="text-xs text-gray-400 mb-1 block">מזהה חשבון מודעות</label>
                 <input
                   type="text"
                   placeholder="act_XXXXXXXXXXXXXXXX"
                   value={launchData.ad_account_id}
                   onChange={(e) => setLaunchData((p) => ({ ...p, ad_account_id: e.target.value }))}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-violet-500 ltr-island"
                 />
               </div>
               <div>
-                <label className="text-xs text-gray-400 mb-1 block">Campaign Name</label>
+                <label className="text-xs text-gray-400 mb-1 block">שם הקמפיין</label>
                 <input
                   type="text"
-                  placeholder="My Campaign"
+                  placeholder="הקמפיין שלי"
                   value={launchData.campaign_name}
                   onChange={(e) => setLaunchData((p) => ({ ...p, campaign_name: e.target.value }))}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-violet-500"
                 />
               </div>
               <div>
-                <label className="text-xs text-gray-400 mb-1 block">Daily Budget (cents, e.g. 1000 = $10)</label>
+                <label className="text-xs text-gray-400 mb-1 block">תקציב יומי (בסנטים, לדוגמה 1000 שווה 10 דולר)</label>
                 <input
                   type="number"
                   placeholder="1000"
                   value={launchData.budget}
                   onChange={(e) => setLaunchData((p) => ({ ...p, budget: e.target.value }))}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-violet-500 ltr-island"
                 />
               </div>
             </div>
@@ -475,16 +475,16 @@ export default function DraftsPage() {
               <button
                 onClick={handleLaunch}
                 disabled={actionLoading}
-                className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 rounded-lg text-sm font-medium transition-colors"
+                className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 rounded-lg text-sm font-medium transition-colors"
               >
                 <Rocket size={14} />
-                {actionLoading ? "Launching…" : "Launch"}
+                {actionLoading ? "משיק" : "השקה"}
               </button>
               <button
                 onClick={() => { setShowLaunchModal(false); }}
                 className="flex-1 py-2.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm font-medium transition-colors"
               >
-                Cancel
+                ביטול
               </button>
             </div>
           </div>

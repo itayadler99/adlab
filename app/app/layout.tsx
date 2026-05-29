@@ -2,12 +2,13 @@ import Link from "next/link";
 import { ReactNode } from "react";
 
 const navLinks = [
-  { href: "/app/generate", label: "Generate" },
-  { href: "/app/spy", label: "Spy" },
-  { href: "/app/launch", label: "Launch" },
-  { href: "/app/library", label: "Library" },
-  { href: "/app/drafts", label: "Drafts" },
-  { href: "/app/costs", label: "Costs" },
+  { href: "/app/generate", label: "יצירה" },
+  { href: "/app/brand", label: "מיתוג" },
+  { href: "/app/spy", label: "ריגול" },
+  { href: "/app/launch", label: "השקה" },
+  { href: "/app/library", label: "ספרייה" },
+  { href: "/app/drafts", label: "טיוטות" },
+  { href: "/app/costs", label: "עלויות" },
 ];
 
 export default function AppLayout({ children }: { children: ReactNode }) {
@@ -28,12 +29,12 @@ export default function AppLayout({ children }: { children: ReactNode }) {
             </Link>
           ))}
         </nav>
-        <div className="ml-auto shrink-0">
+        <div className="ms-auto shrink-0">
           <Link
             href="/"
             className="text-xs text-white/30 hover:text-white/60 transition-colors"
           >
-            ← Home
+            לדף הבית
           </Link>
         </div>
       </header>
