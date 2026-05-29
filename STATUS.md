@@ -227,8 +227,129 @@ Acceptance criteria status
    + $0 (ffmpeg) = $0.44. UGC: $0.06 + $0.04 + $0.30 + $0.02 + $0.10 +
    $0 = $0.52. Both well inside.
 
-Verification still required against a live deployment — the container
-this build ran in has no outbound network for the actual model calls;
-all tiers are typechecked + built. Owner can `git pull` the branch
-into main, redeploy on Vercel, and run `scripts/smoke-stitch.mjs`
-against `https://adlab-amber.vercel.app` to validate tier ordering.
+## Phase 7 — Research-driven refresh (Speel-grade post-process + Kling 2.5) ⚠️ unverified
+
+Triggered by `RESEARCH_FINDINGS.md` (commit `5e3022b` on main). All changes
+typecheck and build clean but have NOT been smoke-tested against live model
+endpoints — the container that ran this build has no outbound network. Owner
+should redeploy on Vercel and run `scripts/smoke-{stitch,showcase,postprocess}.mjs`.
+
+### Scope guard
+
+After phase 6 the project was split across four parallel cowork branches.
+This branch (`claude/charming-rubin-13BwT`) now owns ONLY the video pipeline:
+`lib/stitch.ts`, `lib/showcase.ts`, `lib/postprocess.ts`,
+`lib/quality-check.ts`, `app/api/stitch/**`, `app/api/showcase/**`,
+`scripts/smoke-*`. Everything else (UGC audio/lipsync, autopilot UI, Meta
+loop) is owned by the three sister branches and was left untouched in this
+phase.
+
+### Phase priority re-rank applied
+
+Per the research, post-processing closes ~70% of the realism gap before any
+model swap. Re-ranked roadmap:
+
+| New | Phase | Status |
+|---|---|---|
+| 1 | Stitching fix | ✅ done in commit `3c07b8d` |
+| 2 | Post-processing (was 3) | ✅ rewritten in this phase |
+| 2.5 | ElevenLabs v3 + sync-labs/lipsync-2 | ⏳ owned by `feat/audio-captions` (touches `lib/ugc.ts`) |
+| 3 | UGC composite quality (was 4) | ✅ done in commit `0bf853e` |
+| 4 | Showcase mode (was 2) | ✅ refreshed with Kling 2.5 Pro primary in this phase |
+| 5 | Quality check loop | ✅ done in commit `92450f9`; now using Kling chain on retry |
+| 6 | 4K upscale | ✅ done in commit `ac7df7c` |
+
+### `lib/postprocess.ts` — full research recipe
+
+- Filter graph rewritten as a single `filter_complex`:
+  - split → `gblur+eq` glow stream for **halation**
+  - base → `noise=alls=10:allf=t` + teal/orange `curves` + `eq` saturation
+  - `blend=screen` low-opacity glow back over the base
+  - `unsharp=5:5:0.7` final pop
+  - one re-encode at `libx264 CRF20 yuv420p faststart`
+- New `stripMetadata` (default on) — `-map_metadata -1 -map_chapters -1
+  -fflags +bitexact`. Proxy for the recipe's `exiftool -all=` step;
+  scrubs C2PA / Content Credentials beacons that TikTok flags.
+- RIFE input bumped from `fps=48` to `fps=60` to match the research
+  sweet spot.
+- `trace.metadataStripped` surfaced alongside the other booleans.
+- No iPhone `.cube` LUT was committed — the curves+eq approximation
+  stays as the default. To upgrade, drop `iphone.cube` into
+  `public/luts/` and replace the curves segment with
+  `lut3d=file=${publicPath}`.
+
+### `lib/showcase.ts` — Kling 2.5 Pro primary + fallback chain
+
+- New `ANIMATE_REGISTRY` with four i2v models in research-ranked order:
+  1. `kling-2.5-pro` (FAL `fal-ai/kling-video/v2.5-turbo/pro/image-to-video`)
+  2. `seedance-2.0-pro` (FAL `fal-ai/bytedance/seedance/v2/pro/image-to-video`)
+  3. `veo-3.1-fast` (FAL `fal-ai/veo3/fast/image-to-video`)
+  4. `kling-2.1-master` (Replicate fallback)
+- `nextAnimateModel()` walks the chain on FAL-auth / runtime failures
+  AND on quality-check fails (so a low-scoring seedance clip retries on
+  Kling instead of just toggling between two slugs).
+- New `ShowcaseInputs.chainFromUrl` + `endFrameUrl` for Kling start/end
+  frame chaining across multi-clip showcase ads. `startShowcase()`
+  skips the hero stage when `chainFromUrl` is set so the last frame of
+  clip N can become the first frame of clip N+1.
+- Prompt builders rewritten with the "WORKS" research phrases ("shot on
+  iPhone 15", "soft window light", "imperfect framing", "candid
+  documentary feel") and stripped of the "BREAKS realism" phrases
+  ("cinematic", "professional studio lighting", "perfectly framed",
+  "high quality").
+
+### Phase 2.5 — deferred to `feat/audio-captions`
+
+The research recommends:
+- TTS upgrade from `fal-ai/elevenlabs/tts/turbo-v2.5` → `eleven_v3`
+  (breath, emotion, Hebrew).
+- Lipsync swap from `fal-ai/sync-lipsync/v2` → Replicate
+  `sync-labs/lipsync-2` at $0.05/sec for RTL-aware Hebrew lipsync.
+
+Both live in `lib/ugc.ts` and `app/api/ugc/**`, which are owned by the
+`feat/audio-captions` cowork session. Filed here so it doesn't get lost.
+Concrete diff sketch for that session:
+
+```ts
+// lib/ugc.ts FAL constants
+export const FAL = {
+  // ... unchanged ...
+  tts: "fal-ai/elevenlabs/tts/eleven-v3",   // was turbo-v2.5
+  // lipsync moves off FAL entirely:
+  // submit via Replicate sync-labs/lipsync-2 instead.
+};
+```
+
+### Smoke scripts
+
+- `scripts/smoke-showcase.mjs` — POSTs `/api/showcase/start`, polls
+  `/api/showcase/advance` every 5s until done or 5 min, prints final
+  model + quality score.
+- `scripts/smoke-postprocess.mjs` — POSTs `/api/postprocess` with a
+  default 1080p Google sample and the chosen level, prints the trace.
+
+### What was tested
+
+- `npx tsc --noEmit` clean.
+- `npm run build` clean (`/api/stitch`, `/api/showcase/{start,advance}`,
+  `/api/postprocess`, `/api/quality-check` all registered).
+- Live model calls **NOT** verified. Specifically unverified:
+  - That this account has Kling 2.5 Pro access on FAL.
+  - That `fal-ai/bytedance/seedance/v2/pro/image-to-video` exists at
+    that exact slug for this account (research-stated).
+  - That `fal-ai/veo3/fast/image-to-video` matches the env we're already
+    using (we previously used `fal-ai/veo3.1/fast/image-to-video` — the
+    research uses the unversioned slug; the fallback chain compensates).
+  - That `pollinations/rife` accepts `fps: 60`.
+  - That the new ffmpeg `filter_complex` graph parses cleanly inside
+    ffmpeg-static 5.x.
+- The fallback chain is designed to make every "unverified" item
+  degrade to the next entry, so a wrong slug fails over rather than
+  failing the whole run.
+
+### Blockers
+
+- `BLOB_READ_WRITE_TOKEN` (still — see `BLOCKERS.md`).
+- Kling 2.5 Pro is a paid FAL tier; if this account is not allow-listed
+  the chain falls through to Seedance 2.0 Pro → Veo 3.1 Fast → Replicate
+  Kling 2.1.
