@@ -366,3 +366,29 @@ What was tested
 - Brand kit logo overlay (8% width, bottom-right 24px) runs as part of the same `filter_complex`.
 - Legacy chain remains the default; existing callers untouched.
 - `npx tsc --noEmit` clean; `npm run build` passes.
+
+---
+
+## Phase M — meta loop (Terminal 3, branch `feat/meta-loop`)
+
+Scope: Meta integration + ROAS feedback loop + cron jobs. Live Meta calls are
+blocked by the env network allowlist (see BLOCKERS.md), so verification here is
+`tsc --noEmit` + `npm run build` + code review, not a live smoke test.
+
+### Step 1 — ROAS read correctness + lifetime/7d/30d windows ✅
+- `lib/meta.ts`: **bug fix** — `getCampaigns()` and `getCampaignInsights()`
+  returned Meta's raw `{ data: [...] }` envelope, but `check-winners`,
+  `campaigns/route.ts`, and the learn loop all treated the result as an array.
+  Net effect: the ROAS winner scan iterated over nothing and could never fire.
+  Both now return arrays.
+- Added `getCampaignInsightsMulti(id)` → `{ lifetime, d7, d30 }` using
+  `date_preset=maximum` / `last_7d` / `last_30d` (Itay's ironclad rule), plus
+  `getAccountCampaignInsights()` (one campaign-level call for the dashboard) and
+  pure helpers `roasOf` / `purchaseCount` / `purchaseValue` / `spendOf`.
+- `lib/performance-bias.ts`: `runLearnCron` now reads lifetime + 7d + 30d per
+  ad and stores the lifetime aggregate (30d/7d fallback for young ads). Kept
+  the existing `variant_perf` columns to stay schema-safe.
+- `app/api/campaigns/route.ts`: rewritten to use `getAccountCampaignInsights`
+  (was calling `.map` on a non-array and passing an id[] where a string id
+  was expected).
+- `tsc --noEmit` clean.
