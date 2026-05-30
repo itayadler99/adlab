@@ -366,3 +366,33 @@ What was tested
 - Brand kit logo overlay (8% width, bottom-right 24px) runs as part of the same `filter_complex`.
 - Legacy chain remains the default; existing callers untouched.
 - `npx tsc --noEmit` clean; `npm run build` passes.
+
+---
+
+# Terminal 2 — feat/audio-captions (audio / captions / UGC)
+
+Scope: `lib/captions.ts`, `lib/music.ts`, `lib/ugc.ts`, `lib/souls.ts`,
+`app/api/captions/**`, `app/api/ugc/**`. Owned files only — Terminal 1/3/4
+files untouched.
+
+## Phase A — audio/captions: ElevenLabs v3 Hebrew tuning ✅
+
+What changed
+- `lib/ugc-prompts.ts`:
+  - New `HEBREW_VOICE_LIBRARY` + reworked `pickVoiceId()` so Hebrew resolves
+    per-archetype with override precedence
+    `ELEVENLABS_VOICE_HE_<ARCHETYPE>` → `ELEVENLABS_VOICE_HE` → built-in
+    multilingual default (was: always Rachel for Hebrew).
+  - New `buildVoiceSettings(archetype, language)` → per-archetype eleven-v3
+    knobs (stability / similarity_boost / style / use_speaker_boost / speed).
+    Hebrew lowers stability + style and slows speed to ~0.95 for natural
+    Israeli-market cadence and cleaner phonemes (feeds step 2 lipsync).
+  - New `sanitizeScriptForTts(script, language)` — strips Latin letters from
+    Hebrew so v3 doesn't code-switch into an English accent mid-sentence,
+    drops em-dashes (owner preference), normalizes quotes/whitespace.
+- `lib/ugc.ts`: TTS stage now uses `buildVoiceSettings` + `sanitizeScriptForTts`
+  for both the eleven-v3 submit and the turbo-v2.5 fallback, and passes a
+  `language_code` hint to lock pronunciation.
+
+What was tested
+- `npx tsc --noEmit` clean.

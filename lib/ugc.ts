@@ -9,6 +9,8 @@ import {
   buildCompositeRetryPrompt,
   buildAnimationPrompt,
   pickVoiceId,
+  buildVoiceSettings,
+  sanitizeScriptForTts,
   normalizeArchetype,
   type UgcPromptCtx,
   type VoiceArchetype,
@@ -403,19 +405,28 @@ async function submitStage(
       break;
     }
     case "tts": {
-      const voiceId = pickVoiceId(archetype, state.inputs.language || "en");
+      const lang = state.inputs.language || "en";
+      const voiceId = pickVoiceId(archetype, lang);
+      // Tune voice_settings per archetype + language (Hebrew gets Israeli-market
+      // cadence). Sanitize the script so Hebrew reads don't code-switch into an
+      // English accent and so em-dashes don't leak into the prosody.
+      const vs = buildVoiceSettings(archetype, lang);
+      const ttsText = sanitizeScriptForTts(state.inputs.script, lang);
       // eleven-v3 takes a nested voice_settings object; turbo-v2.5 takes the
       // same fields flat. We submit v3 first and fall back to turbo-v2.5 if
       // v3 rejects (4xx, unsupported voice, account not enabled, etc.).
       try {
         const v3Input = {
-          text: state.inputs.script,
+          text: ttsText,
           voice: voiceId,
+          // eleven-v3 takes a language_code hint to lock pronunciation.
+          language_code: lang,
           voice_settings: {
-            stability: 0.5,
-            similarity_boost: 0.75,
-            style: 0.4,
-            use_speaker_boost: true,
+            stability: vs.stability,
+            similarity_boost: vs.similarity_boost,
+            style: vs.style,
+            use_speaker_boost: vs.use_speaker_boost,
+            speed: vs.speed,
           },
         };
         const { request_id } = await falLib.submit(FAL.tts, v3Input);
@@ -429,12 +440,13 @@ async function submitStage(
       }
       endpoint = FAL.ttsFallback;
       input = {
-        text: state.inputs.script,
+        text: ttsText,
         voice: voiceId,
-        stability: 0.5,
-        similarity_boost: 0.75,
-        style: 0.4,
-        speed: 1.0,
+        language_code: lang,
+        stability: vs.stability,
+        similarity_boost: vs.similarity_boost,
+        style: vs.style,
+        speed: vs.speed,
       };
       break;
     }
