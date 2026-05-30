@@ -427,25 +427,18 @@ function isModelAccessError(e: unknown): boolean {
 }
 
 // Resolve the LUT path. Accepts:
-//   - undefined  → no LUT (use curves)
-//   - absolute path → use as-is
-//   - relative path → resolved against the deployed app root (process.cwd())
-//   - http(s) URL → download to /tmp first, return the local path
-// Returns undefined when no LUT can be located.
+//   - undefined → opt-in default from env (POSTPROCESS_LUT_PATH), else no LUT.
+//   - http(s) URL → download to /tmp first, return the local path.
+//   - absolute path → use as-is after stat() check.
+// We intentionally avoid walking process.cwd() — Turbopack's NFT bundler
+// then traces the whole project. Use POSTPROCESS_LUT_PATH or pass an
+// absolute path / URL explicitly.
 async function resolveLutPath(lutPath?: string): Promise<string | undefined> {
-  if (!lutPath) {
-    // Auto-pick public/luts/iphone.cube if it's shipped with the deployment.
-    const auto = path.join(process.cwd(), "public", "luts", "iphone.cube");
+  const effective = lutPath || process.env.POSTPROCESS_LUT_PATH;
+  if (!effective) return undefined;
+  if (/^https?:\/\//i.test(effective)) {
     try {
-      await stat(auto);
-      return auto;
-    } catch {
-      return undefined;
-    }
-  }
-  if (/^https?:\/\//i.test(lutPath)) {
-    try {
-      const res = await fetch(lutPath);
+      const res = await fetch(effective);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const dir = await mkdtemp(path.join(tmpdir(), "lut-"));
       const local = path.join(dir, "lut.cube");
@@ -456,13 +449,15 @@ async function resolveLutPath(lutPath?: string): Promise<string | undefined> {
       return undefined;
     }
   }
-  // Assume filesystem path.
-  const abs = path.isAbsolute(lutPath) ? lutPath : path.join(process.cwd(), lutPath);
+  if (!path.isAbsolute(effective)) {
+    console.warn(`[postprocess] LUT path must be absolute or http(s) URL: ${effective}`);
+    return undefined;
+  }
   try {
-    await stat(abs);
-    return abs;
+    await stat(effective);
+    return effective;
   } catch {
-    console.warn(`[postprocess] LUT not found at ${abs}, falling back to curves`);
+    console.warn(`[postprocess] LUT not found at ${effective}, falling back to curves`);
     return undefined;
   }
 }
