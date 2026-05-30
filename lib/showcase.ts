@@ -25,8 +25,11 @@ import * as falLib from "./fal";
 import { checkVideoQuality } from "./quality-check";
 
 export const FAL_HERO_ENDPOINT = "fal-ai/nano-banana/edit";
+/** Secondary hero compositor. nano-banana failures fall through here. */
+export const FAL_HERO_ENDPOINT_FALLBACK = "fal-ai/flux-pro/kontext";
 
 export type ShowcaseStage = "hero" | "animate" | "done" | "failed";
+type HeroProvider = "nano-banana" | "flux-kontext" | "raw-product";
 
 const QUALITY_THRESHOLD = 7;
 const QUALITY_MAX_ATTEMPTS = 2;
@@ -126,6 +129,8 @@ export interface ShowcaseState {
   artifacts: ShowcaseArtifacts;
   pending?: ShowcasePending;
   error?: string;
+  /** Which hero compositor produced the current hero image. */
+  heroProvider?: HeroProvider;
   /** Which i2v model produced the current attempt. */
   animateModel?: AnimateModelId;
   /** Number of full animate attempts (initial + quality-driven retries). */
@@ -180,8 +185,7 @@ export async function advanceShowcase(state: ShowcaseState): Promise<ShowcaseSta
     if (state.pending.provider === "fal") {
       const job = await falLib.poll(state.pending.endpoint, state.pending.jobId);
       if (job.status === "failed") {
-        // If this was an animate stage, walk down the fallback chain before
-        // giving up. Hero failure is terminal — that endpoint is well-tested.
+        // Animate failure → walk the i2v fallback chain.
         if (state.stage === "animate") {
           const fallback = nextAnimateModel(state.animateModel);
           if (fallback) {
@@ -196,6 +200,29 @@ export async function advanceShowcase(state: ShowcaseState): Promise<ShowcaseSta
             } catch (e) {
               state.stage = "failed";
               state.error = `animate fallback to ${fallback} failed: ${errMsg(e)}`;
+              state.updatedAt = Date.now();
+              return state;
+            }
+          }
+        }
+        // Hero failure → walk nano-banana → flux-kontext → raw-product.
+        if (state.stage === "hero") {
+          const nextProvider = nextHeroProvider(state.heroProvider);
+          // nextHeroProvider("raw-product") returns "raw-product" — terminal,
+          // we've already tried everything available. submitHero handles the
+          // raw-product case (just uses productImageUrl directly).
+          if (nextProvider !== state.heroProvider) {
+            console.warn(
+              `[showcase] hero ${state.heroProvider} failed (${job.error || "unknown"}); falling back to ${nextProvider}`
+            );
+            state.pending = undefined;
+            try {
+              await submitHero(state);
+              state.updatedAt = Date.now();
+              return state;
+            } catch (e) {
+              state.stage = "failed";
+              state.error = `hero fallback to ${nextProvider} failed: ${errMsg(e)}`;
               state.updatedAt = Date.now();
               return state;
             }
@@ -336,14 +363,57 @@ async function finalizeAnimate(state: ShowcaseState, videoUrl: string): Promise<
 // ---- stage submitters -----------------------------------------------------
 
 async function submitHero(state: ShowcaseState): Promise<void> {
+  // Pick the next compositor in the chain we haven't tried yet.
+  const nextProvider = nextHeroProvider(state.heroProvider);
+  if (nextProvider === "raw-product") {
+    // Terminal "no compositor available" fallback — animate straight off the
+    // Shopify product photo. Quality drops (no styled background) but the
+    // pipeline stays alive.
+    state.artifacts.heroImageUrl = state.inputs.productImageUrl;
+    state.heroProvider = "raw-product";
+    state.pending = undefined;
+    state.stage = "animate";
+    await submitAnimate(state, ANIMATE_FALLBACK_CHAIN[0]);
+    return;
+  }
+
   const prompt = buildHeroPrompt(state.inputs);
-  const { request_id } = await falLib.submit(FAL_HERO_ENDPOINT, {
-    prompt,
-    image_urls: [state.inputs.productImageUrl],
-    num_images: 1,
-    output_format: "jpeg",
-  });
-  state.pending = { provider: "fal", endpoint: FAL_HERO_ENDPOINT, jobId: request_id };
+  const endpoint =
+    nextProvider === "nano-banana" ? FAL_HERO_ENDPOINT : FAL_HERO_ENDPOINT_FALLBACK;
+
+  const input: Record<string, unknown> =
+    nextProvider === "nano-banana"
+      ? {
+          prompt,
+          image_urls: [state.inputs.productImageUrl],
+          num_images: 1,
+          output_format: "jpeg",
+        }
+      : {
+          // flux-pro/kontext accepts a single conditioning image with an edit
+          // prompt — same shape as nano-banana but a different field name.
+          prompt,
+          image_url: state.inputs.productImageUrl,
+          num_images: 1,
+          output_format: "jpeg",
+        };
+
+  const { request_id } = await falLib.submit(endpoint, input);
+  state.pending = { provider: "fal", endpoint, jobId: request_id };
+  state.heroProvider = nextProvider;
+}
+
+function nextHeroProvider(current?: HeroProvider): HeroProvider {
+  switch (current) {
+    case undefined:
+      return "nano-banana";
+    case "nano-banana":
+      return "flux-kontext";
+    case "flux-kontext":
+      return "raw-product";
+    case "raw-product":
+      return "raw-product";
+  }
 }
 
 async function submitAnimate(state: ShowcaseState, which: AnimateModelId): Promise<void> {
