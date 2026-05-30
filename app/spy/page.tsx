@@ -239,7 +239,7 @@ export default function SpyPage() {
                       scoreColor(result.score.score)
                     }`}
                   >
-                    {result.score.score ?? "—"}
+                    {result.score.score ?? "·"}
                     <span className="text-base font-normal text-zinc-500">/10</span>
                   </span>
                 </div>

@@ -95,10 +95,14 @@ export default function CostsDashboard() {
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-lg font-semibold">תקציב חודשי</h2>
                 <div className="flex items-center gap-2">
-                  <span className="text-sm text-gray-400">תקציב ($):</span>
+                  <label htmlFor="monthly-budget" className="text-sm text-gray-400">
+                    תקציב ($):
+                  </label>
                   <input
+                    id="monthly-budget"
                     type="number"
                     min="1"
+                    aria-label="תקציב חודשי בדולרים"
                     className="w-24 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-sm text-white focus:outline-none focus:border-violet-500 ltr-island"
                     placeholder={String(data.monthlyBudget)}
                     value={budget}

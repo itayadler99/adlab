@@ -475,9 +475,9 @@ export default function LaunchPage() {
                           {c.status}
                         </span>
                       </td>
-                      <td className="py-3 px-4 text-gray-400">{c.objective ? (OBJECTIVE_LABELS[c.objective] ?? c.objective) : "—"}</td>
+                      <td className="py-3 px-4 text-gray-400">{c.objective ? (OBJECTIVE_LABELS[c.objective] ?? c.objective) : "·"}</td>
                       <td className="py-3 px-4 text-gray-400">
-                        {c.insights?.spend != null ? `$${c.insights.spend}` : "—"}
+                        {c.insights?.spend != null ? `$${c.insights.spend}` : "·"}
                       </td>
                       <td className="py-3">
                         <button

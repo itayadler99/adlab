@@ -492,3 +492,10 @@ separately. `npx tsc --noEmit` + `npm run build` green after each.
 - Root `metadata` gained a `metadataBase` + a `title.template` ("%s · AdLab");
   dashboard ("דשבורד") and library ("ספרייה") server pages now set their own
   titles for clean Hebrew browser tabs.
+
+### Gap 6 — Em-dash cleanup + a11y label associations ✅
+- Replaced the em-dash empty-state placeholders (Itay forbids em-dashes)
+  with a muted middle dot in the spy score fallback and the launch
+  campaigns table (objective + spend cells).
+- Costs monthly-budget input now has an associated `<label htmlFor>` +
+  `aria-label` (was an unlinked span next to a bare input).
