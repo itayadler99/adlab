@@ -498,3 +498,16 @@ Gap list (meta+learn+klaviyo+stores+cron):
 - `persistScan()` writes a best-effort audit row to `roas_scan_log`
   (new migration `supabase/migrations/v4_roas_scan_log.sql`; degrades when absent).
 - `tsc --noEmit` clean.
+
+### Batch D — Klaviyo RTL Hebrew email + list management ✅
+- `lib/klaviyo.ts`: `renderAdEmail` is now RTL-aware — Hebrew (default) renders
+  `dir="rtl"`, right-aligned, with the house-style sanitize (dash → comma) and a
+  Hebrew default CTA ("לרכישה"). English still renders LTR.
+- Added `getLists()` / `createList()` / `getOrCreateList()` for audience
+  targeting so a template can be tied to a known list id.
+- `app/api/klaviyo/push/route.ts`: accepts `language` + `listName`, returns the
+  resolved list alongside the template.
+- The full campaign create+send flow is intentionally NOT shipped unverified —
+  see BLOCKERS.md (needs a live Klaviyo account to validate the multi-step
+  campaign-message/template-assign/send-job shapes).
+- `tsc --noEmit` clean.
