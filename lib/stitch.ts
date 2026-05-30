@@ -12,7 +12,8 @@
 import { fal } from "@fal-ai/client";
 import Replicate from "replicate";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile, readFile, stat } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, stat } from "node:fs/promises";
+import { createReadStream } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -206,14 +207,10 @@ async function stitchViaFfmpegStatic(
 
   const workDir = await mkdtemp(path.join(tmpdir(), "stitch-"));
   try {
-    // Download each clip to /tmp, with retry on transient HTTP errors.
-    const localPaths: string[] = [];
-    for (let i = 0; i < urls.length; i++) {
-      const p = path.join(workDir, `clip-${i}.mp4`);
-      const buf = await downloadWithRetry(urls[i]);
-      await writeFile(p, buf);
-      localPaths.push(p);
-    }
+    // Download all clips in parallel with retry. Capped at 4 concurrent
+    // downloads so we don't blow the Vercel function memory if every clip
+    // is 100MB.
+    const localPaths = await downloadAllParallel(workDir, urls, 4);
 
     const outPath = path.join(workDir, "out.mp4");
 
@@ -278,19 +275,51 @@ async function stitchViaFfmpegStatic(
     if (sz > 450 * 1024 * 1024) {
       throw new Error(`stitched mp4 too large (${(sz / 1024 / 1024).toFixed(1)} MB) for Blob upload`);
     }
-    const mp4 = await readFile(outPath);
 
-    // Upload to Vercel Blob.
+    // Stream the file off disk straight into Blob — keeps peak memory ~1 MB
+    // instead of holding the whole stitched mp4 (often 50-150 MB) in a Buffer.
     const { put } = await import("@vercel/blob");
-    const blob = await put(`stitched/${Date.now()}-${urls.length}clips.mp4`, mp4, {
-      access: "public",
-      contentType: "video/mp4",
-      addRandomSuffix: true,
-    });
+    const blob = await put(
+      `stitched/${Date.now()}-${urls.length}clips.mp4`,
+      createReadStream(outPath),
+      {
+        access: "public",
+        contentType: "video/mp4",
+        addRandomSuffix: true,
+      }
+    );
     return { url: blob.url, normalized };
   } finally {
     await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
   }
+}
+
+async function downloadAllParallel(
+  workDir: string,
+  urls: string[],
+  concurrency: number
+): Promise<string[]> {
+  const localPaths: (string | undefined)[] = new Array(urls.length);
+  let nextIdx = 0;
+  async function worker() {
+    while (true) {
+      const i = nextIdx++;
+      if (i >= urls.length) return;
+      const buf = await downloadWithRetry(urls[i]);
+      const p = path.join(workDir, `clip-${i}.mp4`);
+      await writeFile(p, buf);
+      localPaths[i] = p;
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.max(1, Math.min(concurrency, urls.length)) }, () => worker())
+  );
+  // Defensive: ensure every slot was filled. downloadWithRetry throws on
+  // hard failure so this should never trip in practice.
+  for (let i = 0; i < urls.length; i++) {
+    if (!localPaths[i]) throw new Error(`download missing for clip ${i}`);
+  }
+  return localPaths as string[];
 }
 
 async function downloadWithRetry(url: string, attempts = 4): Promise<Buffer> {

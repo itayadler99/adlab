@@ -33,7 +33,8 @@
 // the most-processed URL we have so far.
 import Replicate from "replicate";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile, readFile, stat } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, stat } from "node:fs/promises";
+import { createReadStream } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -350,9 +351,11 @@ async function runFfmpegRealism(
 
     const sz = (await stat(outPath)).size;
     if (sz < 1024) throw new Error(`postprocess mp4 too small (${sz} bytes)`);
-    const mp4 = await readFile(outPath);
+    if (sz > 450 * 1024 * 1024) {
+      throw new Error(`postprocess mp4 too large (${(sz / 1024 / 1024).toFixed(1)} MB) for Blob upload`);
+    }
     const { put } = await import("@vercel/blob");
-    const blob = await put(`postprocess/${Date.now()}.mp4`, mp4, {
+    const blob = await put(`postprocess/${Date.now()}.mp4`, createReadStream(outPath), {
       access: "public",
       contentType: "video/mp4",
       addRandomSuffix: true,
