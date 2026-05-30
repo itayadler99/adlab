@@ -1008,7 +1008,7 @@ export default function AutopilotPage() {
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <div>
                   <div className="text-white/40 text-xs">מתחרה</div>
-                  <div className="text-white">{result.competitorPageName || "—"}</div>
+                  <div className="text-white">{result.competitorPageName || "·"}</div>
                 </div>
                 <div>
                   <div className="text-white/40 text-xs">סגנון</div>

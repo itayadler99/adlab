@@ -508,3 +508,14 @@ separately. `npx tsc --noEmit` + `npm run build` green after each.
 - Smooth in-page anchor scrolling for "איך זה עובד" (globals `scroll-behavior`,
   disabled under reduced-motion). Nav padding tightened on mobile
   (`px-6 sm:px-8`).
+
+### Gap 8 — Autopilot + SoulIdPicker leak sweep ✅
+- Swept `app/autopilot/page.tsx`: no specific dates, no LTR-positioning
+  leaks, no "GRA"; replaced the one visible em-dash placeholder
+  (competitor name fallback) with a middle dot.
+- `components/SoulIdPicker.tsx` was still entirely English ("Character",
+  "Preview — API coming soon", "Loading characters…", "Selected soul:", the
+  disclaimer). Translated all visible copy to clean Hebrew, removed the
+  em-dash, and wrapped the soul id in `.ltr-island`.
+- Fixed em-dashes I had introduced in `app/layout.tsx` + `app/manifest.ts`
+  titles/description (now middle dot / period).

@@ -13,13 +13,13 @@ const heebo = Heebo({
 export const metadata: Metadata = {
   metadataBase: new URL("https://adlab-amber.vercel.app"),
   title: {
-    default: "AdLab — יצירה והשקה של פרסומות בבינה",
+    default: "AdLab · יצירה והשקה של פרסומות בבינה",
     template: "%s · AdLab",
   },
   description:
     "AdLab כותב תסריטים, מפיק סרטוני פרסומת, מנתח מתחרים ומשיק קמפיינים ישירות למטא. הכל ממקום אחד.",
   openGraph: {
-    title: "AdLab — יצירה והשקה של פרסומות בבינה",
+    title: "AdLab · יצירה והשקה של פרסומות בבינה",
     description:
       "כותב תסריטים, מפיק סרטונים, מנתח מתחרים ומשיק קמפיינים למטא. הכל ממקום אחד.",
     type: "website",

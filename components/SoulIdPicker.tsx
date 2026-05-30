@@ -123,11 +123,11 @@ export default function SoulIdPicker({
     <div className={clsx("space-y-3", className)}>
       <div className="flex items-center justify-between">
         <label className="text-sm font-semibold text-white/80">
-          Character (Soul ID)
+          דמות
         </label>
         {!apiReady && (
           <span className="rounded-full bg-yellow-500/20 px-2 py-0.5 text-xs text-yellow-300">
-            Preview — API coming soon
+            תצוגה מקדימה. החיבור בקרוב.
           </span>
         )}
       </div>
@@ -140,7 +140,7 @@ export default function SoulIdPicker({
 
       {loading ? (
         <div className="flex items-center gap-2 text-sm text-white/50">
-          <span className="animate-spin">⏳</span> Loading characters…
+          <span className="animate-spin">⏳</span> טוען דמויות
         </div>
       ) : (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -157,15 +157,15 @@ export default function SoulIdPicker({
 
       {value && (
         <p className="text-xs text-white/40">
-          Selected soul:{" "}
-          <span className="font-mono text-violet-400">{value}</span>
+          דמות נבחרה:{" "}
+          <span className="font-mono text-violet-400 ltr-island">{value}</span>
         </p>
       )}
 
       {!apiReady && (
         <p className="text-xs text-white/30">
-          Soul selection will be applied automatically once the Higgsfield
-          character API becomes available. Avatars shown are placeholders.
+          בחירת הדמות תוחל אוטומטית ברגע שחיבור הדמויות ייפתח. הדמויות המוצגות
+          הן לתצוגה בלבד.
         </p>
       )}
     </div>
