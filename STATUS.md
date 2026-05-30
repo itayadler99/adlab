@@ -457,3 +457,14 @@ separately. `npx tsc --noEmit` + `npm run build` green after each.
   Hebrew system fallback stack, and added: violet `:focus-visible` ring,
   accent `::selection`, slim dark scrollbars, and a `prefers-reduced-motion`
   guard that disables the pulse/spin animations.
+
+### Gap 2 — Error + not-found + loading states ✅
+- `app/not-found.tsx`: Hebrew RTL 404 with links to the dashboard + home
+  (previously the default unstyled Next 404, in English).
+- `app/error.tsx`: client error boundary with a "ניסיון חוזר" reset button
+  and an optional `digest` code; logs to console for debugging.
+- `app/global-error.tsx`: root-layout-level boundary (renders its own
+  `<html dir="rtl">`/`<body>`, inline-styled so it never depends on the
+  failed layout/fonts).
+- `app/app/loading.tsx`: dashboard-shaped skeleton (pulsing cards) so
+  segment navigation feels instant instead of blank.
