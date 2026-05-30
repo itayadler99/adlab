@@ -111,26 +111,26 @@ export default function SpyPage() {
   const isRunning = stage === "fetching" || stage === "transcribing" || stage === "scoring";
 
   const scoreColor = (s?: number) => {
-    if (!s) return "text-zinc-400";
+    if (!s) return "text-white/50";
     if (s >= 8) return "text-emerald-400";
     if (s >= 5) return "text-yellow-400";
     return "text-red-400";
   };
 
   return (
-    <main className="min-h-screen bg-black text-zinc-100 p-6 md:p-10">
+    <main className="min-h-screen bg-black text-white p-6 md:p-10">
       <div className="max-w-2xl mx-auto space-y-8">
         {/* Header */}
         <div>
           <h1 className="text-3xl font-bold tracking-tight">ריגול פרסומות</h1>
-          <p className="mt-1 text-zinc-400 text-sm">
+          <p className="mt-1 text-white/50 text-sm">
             הדביקו קישור מספריית הפרסומות של פייסבוק, ונמשוך את הסרטון, נתמלל אותו ונדרג אותו בלחיצה אחת.
           </p>
         </div>
 
         {/* Input */}
         <div className="space-y-3">
-          <label className="block text-sm font-medium text-zinc-300">
+          <label className="block text-sm font-medium text-white/70">
             קישור מספריית הפרסומות של פייסבוק
           </label>
           <input
@@ -139,15 +139,15 @@ export default function SpyPage() {
             onChange={(e) => setAdUrl(e.target.value)}
             placeholder="https://www.facebook.com/ads/library/?id=123456789"
             disabled={isRunning}
-            className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-3 text-sm placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50 ltr-island"
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-sm placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50 ltr-island"
           />
 
           {/* Manual video URL toggle */}
           {(showVideoOverride || videoUrlOverride) && (
             <div className="space-y-2">
-              <label className="block text-sm font-medium text-zinc-300">
+              <label className="block text-sm font-medium text-white/70">
                 קישור ישיר לסרטון{" "}
-                <span className="text-zinc-500 font-normal">(לא חובה, הדביקו אם המשיכה האוטומטית נכשלה)</span>
+                <span className="text-white/40 font-normal">(לא חובה, הדביקו אם המשיכה האוטומטית נכשלה)</span>
               </label>
               <input
                 type="url"
@@ -155,7 +155,7 @@ export default function SpyPage() {
                 onChange={(e) => setVideoUrlOverride(e.target.value)}
                 placeholder="https://video.xx.fbcdn.net/..."
                 disabled={isRunning}
-                className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-3 text-sm placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50 ltr-island"
+                className="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-sm placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50 ltr-island"
               />
             </div>
           )}
@@ -163,7 +163,7 @@ export default function SpyPage() {
           {!showVideoOverride && !videoUrlOverride && (
             <button
               onClick={() => setShowVideoOverride(true)}
-              className="text-xs text-zinc-500 hover:text-violet-400 transition-colors"
+              className="text-xs text-white/40 hover:text-violet-400 transition-colors"
             >
               + הדביקו קישור ישיר לסרטון במקום
             </button>
@@ -182,11 +182,11 @@ export default function SpyPage() {
         {/* Progress bar */}
         {stage !== "idle" && stage !== "error" && (
           <div className="space-y-2">
-            <div className="flex justify-between text-xs text-zinc-400">
+            <div className="flex justify-between text-xs text-white/50">
               <span>{stageLabel[stage]}</span>
               <span>{progressPct[stage]}%</span>
             </div>
-            <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+            <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
               <div
                 className="h-full bg-violet-500 rounded-full transition-all duration-700"
                 style={{ width: `${progressPct[stage]}%` }}
@@ -208,13 +208,13 @@ export default function SpyPage() {
             {/* Video */}
             {result.videoUrl && (
               <div className="space-y-2">
-                <h2 className="text-sm font-semibold text-zinc-300 tracking-wider">
+                <h2 className="text-sm font-semibold text-white/70 tracking-wider">
                   סרטון
                 </h2>
                 <video
                   src={result.videoUrl}
                   controls
-                  className="w-full rounded-lg border border-zinc-800 bg-zinc-900"
+                  className="w-full rounded-lg border border-white/10 bg-white/5"
                 />
                 <a
                   href={result.videoUrl}
@@ -229,9 +229,9 @@ export default function SpyPage() {
 
             {/* Score */}
             {result.score && (
-              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
+              <div className="bg-white/5 border border-white/10 rounded-xl p-5 space-y-4">
                 <div className="flex items-center justify-between">
-                  <h2 className="text-sm font-semibold text-zinc-300 tracking-wider">
+                  <h2 className="text-sm font-semibold text-white/70 tracking-wider">
                     ציון
                   </h2>
                   <span
@@ -240,7 +240,7 @@ export default function SpyPage() {
                     }`}
                   >
                     {result.score.score ?? "·"}
-                    <span className="text-base font-normal text-zinc-500">/10</span>
+                    <span className="text-base font-normal text-white/40">/10</span>
                   </span>
                 </div>
 
@@ -250,23 +250,23 @@ export default function SpyPage() {
                     result.score?.[key] ? (
                       <div
                         key={key}
-                        className="bg-zinc-800 rounded-lg p-3 space-y-0.5"
+                        className="bg-white/10 rounded-lg p-3 space-y-0.5"
                       >
-                        <p className="text-xs tracking-wider text-zinc-500">
+                        <p className="text-xs tracking-wider text-white/40">
                           {DIMENSION_LABELS[key]}
                         </p>
-                        <p className="text-sm text-zinc-200">{String(result.score![key])}</p>
+                        <p className="text-sm text-white/80">{String(result.score![key])}</p>
                       </div>
                     ) : null
                   )}
                 </div>
 
                 {result.score.overall && (
-                  <div className="bg-zinc-800 rounded-lg p-3">
-                    <p className="text-xs tracking-wider text-zinc-500 mb-1">
+                  <div className="bg-white/10 rounded-lg p-3">
+                    <p className="text-xs tracking-wider text-white/40 mb-1">
                       משוב כללי
                     </p>
-                    <p className="text-sm text-zinc-200 leading-relaxed">
+                    <p className="text-sm text-white/80 leading-relaxed">
                       {result.score.overall}
                     </p>
                   </div>
@@ -277,10 +277,10 @@ export default function SpyPage() {
             {/* Transcript */}
             {result.transcript && (
               <div className="space-y-2">
-                <h2 className="text-sm font-semibold text-zinc-300 tracking-wider">
+                <h2 className="text-sm font-semibold text-white/70 tracking-wider">
                   תמלול
                 </h2>
-                <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 text-sm text-zinc-300 leading-relaxed max-h-60 overflow-y-auto whitespace-pre-wrap">
+                <div className="bg-white/5 border border-white/10 rounded-lg p-4 text-sm text-white/70 leading-relaxed max-h-60 overflow-y-auto whitespace-pre-wrap">
                   {result.transcript}
                 </div>
               </div>
@@ -292,7 +292,7 @@ export default function SpyPage() {
                 href={`/app/generate?inspiration=${encodeURIComponent(
                   result.transcript || ""
                 )}`}
-                className="flex-1 text-center bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm font-medium py-2.5 rounded-lg transition-colors"
+                className="flex-1 text-center bg-white/10 hover:bg-white/15 text-white/80 text-sm font-medium py-2.5 rounded-lg transition-colors"
               >
                 שימוש כהשראה
               </a>
@@ -305,7 +305,7 @@ export default function SpyPage() {
                   setVideoUrlOverride("");
                   setShowVideoOverride(false);
                 }}
-                className="flex-1 text-center bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm font-medium py-2.5 rounded-lg transition-colors"
+                className="flex-1 text-center bg-white/10 hover:bg-white/15 text-white/80 text-sm font-medium py-2.5 rounded-lg transition-colors"
               >
                 ניתוח פרסומת נוספת
               </button>

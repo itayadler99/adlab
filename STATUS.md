@@ -519,3 +519,10 @@ separately. `npx tsc --noEmit` + `npm run build` green after each.
   em-dash, and wrapped the soul id in `.ltr-island`.
 - Fixed em-dashes I had introduced in `app/layout.tsx` + `app/manifest.ts`
   titles/description (now middle dot / period).
+
+### Gap 9 — Spy page palette unification ✅
+- The spy tool was the lone page still on the `zinc` scale. Converted all
+  neutral tokens to the black + white/opacity + violet system used by the
+  landing / generate / brand pages (panels `bg-white/5`, borders
+  `border-white/10`, text at `white/50-80`, placeholders `white/30`).
+  Semantic state colors (emerald/yellow/red/violet) untouched.
