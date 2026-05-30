@@ -474,3 +474,12 @@ separately. `npx tsc --noEmit` + `npm run build` green after each.
   `usePathname` (`aria-current="page"` + filled background), matching child
   routes too. `app/app/layout.tsx` now renders it instead of an inert link
   list, and the `<nav>` got an `aria-label`.
+
+### Gap 4 — Generate flow: poll + render + inspiration handoff ✅
+- `app/generate/page.tsx` no longer dead-ends on a raw job id. It now polls
+  `/api/poll?kind=video` every 4s (transient-error tolerant), shows a
+  rendering state, then renders the finished `<video>` with open/again
+  actions. Failures surface a Hebrew error + retry.
+- Consumes the `?inspiration=` query param the spy tool already links to
+  ("שימוש כהשראה") and pre-fills the prompt, with a notice banner. Wrapped
+  in `<Suspense>` per Next 16's `useSearchParams` requirement.
