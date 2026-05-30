@@ -588,10 +588,25 @@ async function pollReplicateJob(jobId: string): Promise<PolledJob> {
 
 /** Convenience: derive UgcInputs from autopilot's analysis + product + script. */
 export function planUgcInputs(args: {
-  analysis: { hook: string; style: UgcInputs["style"]; body_themes: string[] };
+  analysis: {
+    hook: string;
+    style: UgcInputs["style"];
+    body_themes: string[];
+    /** Optional hints from the LLM analysis. */
+    voiceArchetype?: string;
+    demographic?: string;
+    setting?: string;
+  };
   product: { title: string; description?: string; imageUrl?: string };
   script: string;
   language?: "en" | "he";
+  /** Optional Soul ID + virality gate, forwarded straight through. */
+  soulId?: string;
+  viralityGate?: boolean;
+  /** Caller overrides win over analysis-derived hints. */
+  demographic?: string;
+  setting?: string;
+  voiceArchetype?: string;
 }): UgcInputs | null {
   if (!args.product.imageUrl) return null;
   return {
@@ -602,5 +617,10 @@ export function planUgcInputs(args: {
     hook: args.analysis.hook,
     style: args.analysis.style,
     language: args.language || "en",
+    voiceArchetype: args.voiceArchetype ?? args.analysis.voiceArchetype,
+    demographic: args.demographic ?? args.analysis.demographic,
+    setting: args.setting ?? args.analysis.setting,
+    soulId: args.soulId,
+    viralityGate: args.viralityGate,
   };
 }

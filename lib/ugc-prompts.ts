@@ -266,6 +266,9 @@ export function buildVoiceSettings(archetype?: VoiceArchetype, language: "en" | 
  */
 export function sanitizeScriptForTts(script: string, language: "en" | "he" = "en"): string {
   let s = (script || "")
+    // URLs and emoji read as gibberish in TTS — strip them in both languages.
+    .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE00}-\u{FE0F}\u{1F1E6}-\u{1F1FF}]/gu, " ")
     .replace(/[–—]/g, language === "he" ? "," : "-") // em/en dash → comma (he) / hyphen (en)
     .replace(/[“”„‟]/g, '"')
     .replace(/[‘’‚‛]/g, "'");
