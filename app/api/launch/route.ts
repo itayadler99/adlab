@@ -10,6 +10,7 @@ import {
 import { writeHeadlines } from "@/lib/anthropic";
 import { getStore } from "@/lib/stores";
 import { sanitizeHebrew } from "@/lib/copy";
+import { upsertVariantPerf } from "@/lib/performance-bias";
 import { saveCampaign } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -25,23 +26,40 @@ export async function POST(req: Request) {
     if (b.store_id && !store) {
       return NextResponse.json({ error: `unknown store_id: ${b.store_id}` }, { status: 400 });
     }
+    // Guard against silently launching into the GLOBAL account when a store is
+    // selected but unconfigured (no ad account env set for it).
+    if (store && !b.ad_account_id && !store.adAccountId) {
+      return NextResponse.json(
+        { error: `store "${store.id}" has no ad account configured (set META_AD_ACCOUNT_${store.id.toUpperCase()})` },
+        { status: 400 }
+      );
+    }
     const accountId = b.ad_account_id || store?.adAccountId || undefined;
     const pageId = b.page_id || store?.pageId;
     const link = b.link || store?.defaultLink;
     if (!pageId) return NextResponse.json({ error: "page_id (or a configured store) required" }, { status: 400 });
     if (!link) return NextResponse.json({ error: "link (or a configured store) required" }, { status: 400 });
+    if (!b.name) return NextResponse.json({ error: "name required" }, { status: 400 });
+    if (!b.video_url) return NextResponse.json({ error: "video_url required" }, { status: 400 });
+    const dailyBudget = Number(b.daily_budget);
+    if (!Number.isFinite(dailyBudget) || dailyBudget <= 0) {
+      return NextResponse.json({ error: "daily_budget must be a positive number" }, { status: 400 });
+    }
 
     // Headline variants: when no message is supplied, auto-generate 3 in Itay's
     // Hebrew style and use the first as the primary text. All 3 are returned so
     // the caller can launch siblings or let the owner pick.
+    const lang = b.language || "he";
     let message: string = b.message ?? "";
+    // Sanitize an explicitly-provided Hebrew message too (em-dash → comma etc).
+    if (message.trim() && lang === "he") message = sanitizeHebrew(message);
     let headlines: string[] | undefined;
     if (!message.trim() && (b.product_title || b.productTitle)) {
       try {
         const res = await writeHeadlines({
           productTitle: b.product_title || b.productTitle,
           productDescription: b.product_description || b.productDescription,
-          language: b.language || "he",
+          language: lang,
         });
         headlines = (res.headlines || []).map((h) => sanitizeHebrew(h)).filter(Boolean).slice(0, 3);
         message = headlines[0] ?? "";
@@ -56,7 +74,7 @@ export async function POST(req: Request) {
     const adset = await createAdset({
       name: b.name + " · adset",
       campaign_id: campaign.id,
-      daily_budget: b.daily_budget,
+      daily_budget: dailyBudget,
       countries: b.countries,
       age_min: b.age_min,
       age_max: b.age_max,
@@ -100,11 +118,25 @@ export async function POST(req: Request) {
       meta_creative_id: creative.id,
       meta_ad_id: ad.id,
       video_url: b.video_url,
-      daily_budget: b.daily_budget,
+      daily_budget: dailyBudget,
       countries: b.countries,
       store_id: store?.id,
       ad_account_id: accountId,
     });
+
+    // Close the ROAS feedback loop: seed a variant_perf row linking this ad to
+    // its archetype + vertical so the daily learn cron can backfill its ROAS and
+    // topArchetypes() can bias future scripts. Best-effort (no-op without Supabase
+    // / when no archetype metadata is supplied).
+    if (b.vertical || b.hook_archetype) {
+      await upsertVariantPerf({
+        variant_id: b.variant_id || ad.id,
+        meta_ad_id: ad.id,
+        hook_archetype: b.hook_archetype,
+        actor_archetype: b.actor_archetype,
+        vertical: b.vertical || store?.id,
+      });
+    }
 
     return NextResponse.json({
       campaign_id: campaign.id,
