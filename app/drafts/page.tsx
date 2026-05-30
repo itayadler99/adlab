@@ -176,7 +176,7 @@ export default function DraftsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-black text-gray-100">
+    <div className="min-h-screen bg-black text-white">
       {/* Toast */}
       {toast && (
         <div
@@ -194,12 +194,12 @@ export default function DraftsPage() {
         <div className="flex items-center justify-between mb-8">
           <div>
             <h1 className="text-2xl font-bold text-white">תור הטיוטות</h1>
-            <p className="text-gray-400 text-sm mt-1">בדקו ואשרו פרסומות לפני ההשקה למטא</p>
+            <p className="text-white/50 text-sm mt-1">בדקו ואשרו פרסומות לפני ההשקה למטא</p>
           </div>
           <div className="flex items-center gap-3">
             <button
               onClick={fetchDrafts}
-              className="flex items-center gap-2 px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-colors"
+              className="flex items-center gap-2 px-3 py-2 bg-white/10 hover:bg-white/15 rounded-lg text-sm transition-colors"
             >
               <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
               רענון
@@ -215,15 +215,15 @@ export default function DraftsPage() {
         </div>
 
         {/* Filter tabs */}
-        <div className="flex items-center gap-1 mb-6 bg-gray-900 p-1 rounded-lg w-fit">
+        <div className="flex items-center gap-1 mb-6 bg-white/5 p-1 rounded-lg w-fit">
           {(["all", "draft", "approved", "rejected", "launched"] as const).map((s) => (
             <button
               key={s}
               onClick={() => setFilterStatus(s)}
               className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
                 filterStatus === s
-                  ? "bg-gray-700 text-white"
-                  : "text-gray-400 hover:text-gray-200"
+                  ? "bg-white/15 text-white"
+                  : "text-white/50 hover:text-white/80"
               }`}
             >
               {s === "all" ? "הכל" : STATUS_CONFIG[s as DraftStatus].label}{" "}
@@ -237,10 +237,10 @@ export default function DraftsPage() {
           <div className="lg:col-span-1 space-y-3">
             {loading ? (
               Array.from({ length: 4 }).map((_, i) => (
-                <div key={i} className="h-24 bg-gray-800 rounded-xl animate-pulse" />
+                <div key={i} className="h-24 bg-white/10 rounded-xl animate-pulse" />
               ))
             ) : filtered.length === 0 ? (
-              <div className="text-center py-12 text-gray-500">
+              <div className="text-center py-12 text-white/40">
                 <Clock size={32} className="mx-auto mb-3 opacity-40" />
                 <p>לא נמצאו טיוטות</p>
               </div>
@@ -252,21 +252,21 @@ export default function DraftsPage() {
                   className={`w-full text-start p-4 rounded-xl border transition-all ${
                     selected?.id === draft.id
                       ? "border-violet-500 bg-violet-500/10"
-                      : "border-gray-800 bg-gray-900 hover:border-gray-600"
+                      : "border-white/10 bg-white/5 hover:border-white/30"
                   }`}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <p className="font-medium text-sm truncate">{draft.title}</p>
                       {draft.product_title && (
-                        <p className="text-xs text-gray-500 truncate mt-0.5">{draft.product_title}</p>
+                        <p className="text-xs text-white/40 truncate mt-0.5">{draft.product_title}</p>
                       )}
                     </div>
-                    <ChevronRight size={14} className="text-gray-600 flex-shrink-0 mt-0.5 rotate-180" />
+                    <ChevronRight size={14} className="text-white/30 flex-shrink-0 mt-0.5 rotate-180" />
                   </div>
                   <div className="flex items-center justify-between mt-2">
                     <StatusBadge status={draft.status} />
-                    <span className="text-xs text-gray-600">
+                    <span className="text-xs text-white/30">
                       {new Date(draft.created_at).toLocaleDateString("he-IL")}
                     </span>
                   </div>
@@ -278,20 +278,20 @@ export default function DraftsPage() {
           {/* Detail panel */}
           <div className="lg:col-span-2">
             {!selected ? (
-              <div className="h-full flex items-center justify-center text-gray-600 border border-dashed border-gray-800 rounded-xl p-12">
+              <div className="h-full flex items-center justify-center text-white/30 border border-dashed border-white/10 rounded-xl p-12">
                 <div className="text-center">
                   <Clock size={40} className="mx-auto mb-3 opacity-40" />
                   <p>בחרו טיוטה לבדיקה</p>
                 </div>
               </div>
             ) : (
-              <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-6">
+              <div className="bg-white/5 border border-white/10 rounded-xl p-6 space-y-6">
                 {/* Title row */}
                 <div className="flex items-start justify-between gap-4">
                   <div>
                     <h2 className="text-lg font-bold">{selected.title}</h2>
                     {selected.product_title && (
-                      <p className="text-sm text-gray-400 mt-0.5">{selected.product_title}</p>
+                      <p className="text-sm text-white/50 mt-0.5">{selected.product_title}</p>
                     )}
                   </div>
                   <StatusBadge status={selected.status} />
@@ -300,7 +300,7 @@ export default function DraftsPage() {
                 {/* Video preview */}
                 {selected.video_url && (
                   <div>
-                    <p className="text-xs font-medium text-gray-500 tracking-wider mb-2">סרטון</p>
+                    <p className="text-xs font-medium text-white/40 tracking-wider mb-2">סרטון</p>
                     <video
                       src={selected.video_url}
                       controls
@@ -311,8 +311,8 @@ export default function DraftsPage() {
 
                 {/* Script */}
                 <div>
-                  <p className="text-xs font-medium text-gray-500 tracking-wider mb-2">תסריט</p>
-                  <div className="bg-gray-800 rounded-lg p-4 text-sm text-gray-300 whitespace-pre-wrap max-h-48 overflow-y-auto">
+                  <p className="text-xs font-medium text-white/40 tracking-wider mb-2">תסריט</p>
+                  <div className="bg-white/10 rounded-lg p-4 text-sm text-white/70 whitespace-pre-wrap max-h-48 overflow-y-auto">
                     {selected.script}
                   </div>
                 </div>
@@ -321,14 +321,14 @@ export default function DraftsPage() {
                 {(selected.campaign_name || selected.budget) && (
                   <div className="grid grid-cols-2 gap-3">
                     {selected.campaign_name && (
-                      <div className="bg-gray-800 rounded-lg p-3">
-                        <p className="text-xs text-gray-500 mb-1">שם הקמפיין</p>
+                      <div className="bg-white/10 rounded-lg p-3">
+                        <p className="text-xs text-white/40 mb-1">שם הקמפיין</p>
                         <p className="text-sm font-medium">{selected.campaign_name}</p>
                       </div>
                     )}
                     {selected.budget && (
-                      <div className="bg-gray-800 rounded-lg p-3">
-                        <p className="text-xs text-gray-500 mb-1">תקציב יומי</p>
+                      <div className="bg-white/10 rounded-lg p-3">
+                        <p className="text-xs text-white/40 mb-1">תקציב יומי</p>
                         <p className="text-sm font-medium">${(selected.budget / 100).toFixed(2)}</p>
                       </div>
                     )}
@@ -404,15 +404,15 @@ export default function DraftsPage() {
       {/* Reject Modal */}
       {showRejectModal && selected && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-md">
+          <div className="bg-white/5 border border-white/10 rounded-2xl p-6 w-full max-w-md">
             <h3 className="text-lg font-bold mb-1">דחיית טיוטה</h3>
-            <p className="text-sm text-gray-400 mb-4">אפשר לציין סיבה לדחיית "{selected.title}"</p>
+            <p className="text-sm text-white/50 mb-4">אפשר לציין סיבה לדחיית "{selected.title}"</p>
             <textarea
               value={rejectReason}
               onChange={(e) => setRejectReason(e.target.value)}
               placeholder="סיבת הדחייה (לא חובה)"
               rows={3}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-red-500 resize-none"
+              className="w-full bg-white/10 border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-red-500 resize-none"
             />
             <div className="flex gap-3 mt-4">
               <button
@@ -424,7 +424,7 @@ export default function DraftsPage() {
               </button>
               <button
                 onClick={() => { setShowRejectModal(false); setRejectReason(""); }}
-                className="flex-1 py-2.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm font-medium transition-colors"
+                className="flex-1 py-2.5 bg-white/15 hover:bg-white/20 rounded-lg text-sm font-medium transition-colors"
               >
                 ביטול
               </button>
@@ -436,38 +436,38 @@ export default function DraftsPage() {
       {/* Launch Modal */}
       {showLaunchModal && selected && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-md">
+          <div className="bg-white/5 border border-white/10 rounded-2xl p-6 w-full max-w-md">
             <h3 className="text-lg font-bold mb-1">השקה למטא</h3>
-            <p className="text-sm text-gray-400 mb-4">הגדרות מטא לפרסומת "{selected.title}"</p>
+            <p className="text-sm text-white/50 mb-4">הגדרות מטא לפרסומת "{selected.title}"</p>
             <div className="space-y-3">
               <div>
-                <label className="text-xs text-gray-400 mb-1 block">מזהה חשבון מודעות</label>
+                <label className="text-xs text-white/50 mb-1 block">מזהה חשבון מודעות</label>
                 <input
                   type="text"
                   placeholder="act_XXXXXXXXXXXXXXXX"
                   value={launchData.ad_account_id}
                   onChange={(e) => setLaunchData((p) => ({ ...p, ad_account_id: e.target.value }))}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-violet-500 ltr-island"
+                  className="w-full bg-white/10 border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-violet-500 ltr-island"
                 />
               </div>
               <div>
-                <label className="text-xs text-gray-400 mb-1 block">שם הקמפיין</label>
+                <label className="text-xs text-white/50 mb-1 block">שם הקמפיין</label>
                 <input
                   type="text"
                   placeholder="הקמפיין שלי"
                   value={launchData.campaign_name}
                   onChange={(e) => setLaunchData((p) => ({ ...p, campaign_name: e.target.value }))}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-violet-500"
+                  className="w-full bg-white/10 border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-violet-500"
                 />
               </div>
               <div>
-                <label className="text-xs text-gray-400 mb-1 block">תקציב יומי (בסנטים, לדוגמה 1000 שווה 10 דולר)</label>
+                <label className="text-xs text-white/50 mb-1 block">תקציב יומי (בסנטים, לדוגמה 1000 שווה 10 דולר)</label>
                 <input
                   type="number"
                   placeholder="1000"
                   value={launchData.budget}
                   onChange={(e) => setLaunchData((p) => ({ ...p, budget: e.target.value }))}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-violet-500 ltr-island"
+                  className="w-full bg-white/10 border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-violet-500 ltr-island"
                 />
               </div>
             </div>
@@ -482,7 +482,7 @@ export default function DraftsPage() {
               </button>
               <button
                 onClick={() => { setShowLaunchModal(false); }}
-                className="flex-1 py-2.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm font-medium transition-colors"
+                className="flex-1 py-2.5 bg-white/15 hover:bg-white/20 rounded-lg text-sm font-medium transition-colors"
               >
                 ביטול
               </button>

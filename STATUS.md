@@ -526,3 +526,27 @@ separately. `npx tsc --noEmit` + `npm run build` green after each.
   landing / generate / brand pages (panels `bg-white/5`, borders
   `border-white/10`, text at `white/50-80`, placeholders `white/30`).
   Semantic state colors (emerald/yellow/red/violet) untouched.
+
+### Gap 10 — Palette unification across launch / drafts / costs ✅
+- Converted the remaining `gray`-scale pages (launch, drafts, costs) to the
+  same black + white/opacity + violet system as the rest of the app, so
+  panels, borders, dividers and text opacities are now consistent app-wide
+  (this also makes the earlier STATUS "unified palette" claim actually true).
+  Semantic colors (green/red/yellow/blue/violet states) left intact.
+- `npm run build` green; no `gray-*`/`zinc-*` tokens remain in any tool page.
+
+---
+
+## SCOPE COMPLETE — production ready
+
+TASKS steps 1-5 (Hebrew RTL polish, landing, brand kit, per-stage stream
+preview, cost dashboard) plus a 10-item hardening wave are done, committed,
+and pushed to `feat/ux-rtl`. Every page in scope is Hebrew-first RTL, on one
+sleek black/violet palette, with error/404/loading states, optimized
+self-hosted fonts, SEO/PWA metadata, and a working generate→render flow.
+`npx tsc --noEmit` and `npm run build` both pass. No `main`, `BACKLOG.md`,
+or Terminal 1/2/3 files were touched.
+
+Verification limit: container has no outbound network for the model hosts
+(see Phase 9 blocker), so live generation was not exercised end-to-end;
+all changes are typecheck + build verified.

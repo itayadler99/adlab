@@ -53,10 +53,10 @@ export default function CostsDashboard() {
     <main className="min-h-screen bg-black text-white p-6">
       <div className="max-w-4xl mx-auto">
         <h1 className="text-3xl font-bold mb-2">לוח עלויות</h1>
-        <p className="text-gray-400 mb-8">הוצאה משוערת לפי פעילות ההפקה</p>
+        <p className="text-white/50 mb-8">הוצאה משוערת לפי פעילות ההפקה</p>
 
         {loading && (
-          <div className="text-gray-400 animate-pulse">טוען נתוני עלויות</div>
+          <div className="text-white/50 animate-pulse">טוען נתוני עלויות</div>
         )}
         {error && (
           <div className="bg-red-900/40 border border-red-700 rounded-lg p-4 text-red-300">
@@ -91,11 +91,11 @@ export default function CostsDashboard() {
             </div>
 
             {/* Monthly Budget Bar */}
-            <section className="bg-gray-900 rounded-2xl p-6 mb-8 border border-gray-800">
+            <section className="bg-white/5 rounded-2xl p-6 mb-8 border border-white/10">
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-lg font-semibold">תקציב חודשי</h2>
                 <div className="flex items-center gap-2">
-                  <label htmlFor="monthly-budget" className="text-sm text-gray-400">
+                  <label htmlFor="monthly-budget" className="text-sm text-white/50">
                     תקציב ($):
                   </label>
                   <input
@@ -103,7 +103,7 @@ export default function CostsDashboard() {
                     type="number"
                     min="1"
                     aria-label="תקציב חודשי בדולרים"
-                    className="w-24 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-sm text-white focus:outline-none focus:border-violet-500 ltr-island"
+                    className="w-24 bg-white/10 border border-white/10 rounded-lg px-2 py-1 text-sm text-white focus:outline-none focus:border-violet-500 ltr-island"
                     placeholder={String(data.monthlyBudget)}
                     value={budget}
                     onChange={(e) => {
@@ -114,14 +114,14 @@ export default function CostsDashboard() {
                   />
                 </div>
               </div>
-              <div className="relative h-8 bg-gray-800 rounded-full overflow-hidden">
+              <div className="relative h-8 bg-white/10 rounded-full overflow-hidden">
                 <div
                   className={`h-full rounded-full transition-all duration-700 ${barColor}`}
                   style={{ width: `${effectivePct}%` }}
                 />
               </div>
               <div className="flex justify-between mt-2 text-sm">
-                <span className="text-gray-400">
+                <span className="text-white/50">
                   ${data.monthlyBurn.toFixed(2)} נוצלו
                 </span>
                 <span
@@ -135,12 +135,12 @@ export default function CostsDashboard() {
                 >
                   {effectivePct}%
                 </span>
-                <span className="text-gray-400">תקציב ${effectiveBudget}</span>
+                <span className="text-white/50">תקציב ${effectiveBudget}</span>
               </div>
             </section>
 
             {/* Cost Breakdown */}
-            <section className="bg-gray-900 rounded-2xl p-6 mb-8 border border-gray-800">
+            <section className="bg-white/5 rounded-2xl p-6 mb-8 border border-white/10">
               <h2 className="text-lg font-semibold mb-4">פירוט עלות (להפקה)</h2>
               <div className="space-y-3">
                 <CostRow
@@ -156,14 +156,14 @@ export default function CostsDashboard() {
                   color="bg-fuchsia-500"
                 />
               </div>
-              <p className="text-xs text-gray-500 mt-4">
+              <p className="text-xs text-white/40 mt-4">
                 האומדנים מבוססים על תמחור מקובל של המודלים. העלות בפועל עשויה להשתנות.
               </p>
             </section>
 
             {/* Daily Costs Chart */}
             {data.dailyCosts.length > 0 && (
-              <section className="bg-gray-900 rounded-2xl p-6 border border-gray-800">
+              <section className="bg-white/5 rounded-2xl p-6 border border-white/10">
                 <h2 className="text-lg font-semibold mb-4">הוצאה יומית ({data.dailyCosts.length} ימים אחרונים)</h2>
                 <div className="flex items-end gap-1 h-40">
                   {data.dailyCosts.slice(-30).map((d) => {
@@ -177,14 +177,14 @@ export default function CostsDashboard() {
                           className="w-full bg-violet-500 rounded-t hover:bg-violet-400 transition-colors cursor-default"
                           style={{ height: `${Math.max(heightPct, 2)}%` }}
                         />
-                        <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-gray-700 text-xs text-white px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none z-10">
+                        <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-white/15 text-xs text-white px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none z-10">
                           {d.date}: ${d.cost.toFixed(4)}
                         </div>
                       </div>
                     );
                   })}
                 </div>
-                <div className="flex justify-between mt-2 text-xs text-gray-500">
+                <div className="flex justify-between mt-2 text-xs text-white/40">
                   <span>{data.dailyCosts.slice(-30)[0]?.date ?? ""}</span>
                   <span>{data.dailyCosts.slice(-30).at(-1)?.date ?? ""}</span>
                 </div>
@@ -207,12 +207,12 @@ function StatCard({
   sub: string;
 }) {
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4">
-      <p className="text-xs text-gray-400 tracking-wide mb-1">{label}</p>
+    <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
+      <p className="text-xs text-white/50 tracking-wide mb-1">{label}</p>
       <p className="text-2xl font-bold text-white">
         <span className="ltr-island inline-block">{value}</span>
       </p>
-      <p className="text-xs text-gray-500 mt-1">{sub}</p>
+      <p className="text-xs text-white/40 mt-1">{sub}</p>
     </div>
   );
 }
@@ -231,10 +231,10 @@ function CostRow({
   return (
     <div>
       <div className="flex justify-between text-sm mb-1">
-        <span className="text-gray-300">{label}</span>
+        <span className="text-white/70">{label}</span>
         <span className="text-white font-mono ltr-island inline-block">${cost.toFixed(4)}</span>
       </div>
-      <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
+      <div className="h-2 bg-white/10 rounded-full overflow-hidden">
         <div
           className={`h-full rounded-full ${color}`}
           style={{ width: `${pct}%` }}

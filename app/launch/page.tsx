@@ -171,20 +171,20 @@ export default function LaunchPage() {
   const selectedCampaign = campaigns.find((c) => c.id === selectedCampaignId);
 
   return (
-    <div className="min-h-screen bg-black text-gray-100 p-6">
+    <div className="min-h-screen bg-black text-white p-6">
       <div className="max-w-4xl mx-auto space-y-8">
         <div>
           <h1 className="text-3xl font-bold text-white">השקת קמפיין</h1>
-          <p className="text-gray-400 mt-1">בחרו קמפיין מטא קיים לשכפול ועריכה, או צרו קמפיין חדש.</p>
+          <p className="text-white/50 mt-1">בחרו קמפיין מטא קיים לשכפול ועריכה, או צרו קמפיין חדש.</p>
         </div>
 
         {/* Store Picker */}
-        <div className="bg-gray-900 rounded-xl p-6 space-y-3">
+        <div className="bg-white/5 rounded-xl p-6 space-y-3">
           <h2 className="text-lg font-semibold text-white">חנות</h2>
           <select
             value={selectedStoreId}
             onChange={(e) => handleSelectStore(e.target.value)}
-            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+            className="w-full bg-white/10 border border-white/10 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
           >
             <option value="">בחרו חנות</option>
             {stores.map((s) => (
@@ -193,13 +193,13 @@ export default function LaunchPage() {
               </option>
             ))}
           </select>
-          <p className="text-xs text-gray-500">
+          <p className="text-xs text-white/40">
             בחירת חנות ממלאת אוטומטית את חשבון המודעות, העמוד וכתובת היעד.
           </p>
         </div>
 
         {/* Existing Campaigns */}
-        <div className="bg-gray-900 rounded-xl p-6 space-y-4">
+        <div className="bg-white/5 rounded-xl p-6 space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-white">קמפיינים קיימים במטא</h2>
             <button
@@ -218,18 +218,18 @@ export default function LaunchPage() {
           )}
 
           {loadingCampaigns && campaigns.length === 0 ? (
-            <div className="text-gray-500 text-sm py-4 text-center">טוען קמפיינים</div>
+            <div className="text-white/40 text-sm py-4 text-center">טוען קמפיינים</div>
           ) : campaigns.length === 0 ? (
-            <div className="text-gray-500 text-sm py-4 text-center">לא נמצאו קמפיינים.</div>
+            <div className="text-white/40 text-sm py-4 text-center">לא נמצאו קמפיינים.</div>
           ) : (
             <div className="space-y-2">
-              <label className="block text-sm font-medium text-gray-300">
+              <label className="block text-sm font-medium text-white/70">
                 בחרו קמפיין לשכפול
               </label>
               <select
                 value={selectedCampaignId}
                 onChange={(e) => handleSelectCampaign(e.target.value)}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                className="w-full bg-white/10 border border-white/10 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
               >
                 <option value="">בחרו קמפיין</option>
                 {campaigns.map((c) => (
@@ -242,27 +242,27 @@ export default function LaunchPage() {
           )}
 
           {selectedCampaign && (
-            <div className="bg-gray-800 rounded-lg p-4 text-sm space-y-1">
+            <div className="bg-white/10 rounded-lg p-4 text-sm space-y-1">
               <div className="flex flex-wrap gap-4">
-                <span><span className="text-gray-400">מזהה:</span> <span className="text-gray-200 ltr-island">{selectedCampaign.id}</span></span>
-                <span><span className="text-gray-400">סטטוס:</span> <span className={selectedCampaign.status === "ACTIVE" ? "text-green-400" : "text-yellow-400"}>{selectedCampaign.status}</span></span>
+                <span><span className="text-white/50">מזהה:</span> <span className="text-white/80 ltr-island">{selectedCampaign.id}</span></span>
+                <span><span className="text-white/50">סטטוס:</span> <span className={selectedCampaign.status === "ACTIVE" ? "text-green-400" : "text-yellow-400"}>{selectedCampaign.status}</span></span>
                 {selectedCampaign.objective && (
-                  <span><span className="text-gray-400">מטרה:</span> <span className="text-gray-200">{OBJECTIVE_LABELS[selectedCampaign.objective] ?? selectedCampaign.objective}</span></span>
+                  <span><span className="text-white/50">מטרה:</span> <span className="text-white/80">{OBJECTIVE_LABELS[selectedCampaign.objective] ?? selectedCampaign.objective}</span></span>
                 )}
               </div>
               {selectedCampaign.insights && (
-                <div className="flex flex-wrap gap-4 mt-2 pt-2 border-t border-gray-700">
+                <div className="flex flex-wrap gap-4 mt-2 pt-2 border-t border-white/10">
                   {selectedCampaign.insights.spend != null && (
-                    <span><span className="text-gray-400">הוצאה:</span> <span className="text-gray-200">${selectedCampaign.insights.spend}</span></span>
+                    <span><span className="text-white/50">הוצאה:</span> <span className="text-white/80">${selectedCampaign.insights.spend}</span></span>
                   )}
                   {selectedCampaign.insights.impressions != null && (
-                    <span><span className="text-gray-400">חשיפות:</span> <span className="text-gray-200">{selectedCampaign.insights.impressions}</span></span>
+                    <span><span className="text-white/50">חשיפות:</span> <span className="text-white/80">{selectedCampaign.insights.impressions}</span></span>
                   )}
                   {selectedCampaign.insights.clicks != null && (
-                    <span><span className="text-gray-400">קליקים:</span> <span className="text-gray-200">{selectedCampaign.insights.clicks}</span></span>
+                    <span><span className="text-white/50">קליקים:</span> <span className="text-white/80">{selectedCampaign.insights.clicks}</span></span>
                   )}
                   {selectedCampaign.insights.ctr != null && (
-                    <span><span className="text-gray-400">אחוז הקלקה:</span> <span className="text-gray-200">{selectedCampaign.insights.ctr}%</span></span>
+                    <span><span className="text-white/50">אחוז הקלקה:</span> <span className="text-white/80">{selectedCampaign.insights.ctr}%</span></span>
                   )}
                 </div>
               )}
@@ -280,7 +280,7 @@ export default function LaunchPage() {
             )}
             <button
               onClick={handleNewCampaign}
-              className="px-5 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-medium transition"
+              className="px-5 py-2 bg-white/15 hover:bg-white/20 text-white rounded-lg font-medium transition"
             >
               קמפיין חדש
             </button>
@@ -289,13 +289,13 @@ export default function LaunchPage() {
 
         {/* Clone / Create Form */}
         {showClonePanel && (
-          <div className="bg-gray-900 rounded-xl p-6 space-y-5">
+          <div className="bg-white/5 rounded-xl p-6 space-y-5">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold text-white">
                 {form.clonedFromId ? "שכפול קמפיין" : "קמפיין חדש"}
               </h2>
               {form.clonedFromId && (
-                <span className="text-xs text-gray-500 bg-gray-800 px-3 py-1 rounded-full">
+                <span className="text-xs text-white/40 bg-white/10 px-3 py-1 rounded-full">
                   שוכפל מתוך <span className="ltr-island">{form.clonedFromId}</span>
                 </span>
               )}
@@ -303,22 +303,22 @@ export default function LaunchPage() {
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="md:col-span-2">
-                <label className="block text-sm font-medium text-gray-300 mb-1">שם הקמפיין *</label>
+                <label className="block text-sm font-medium text-white/70 mb-1">שם הקמפיין *</label>
                 <input
                   type="text"
                   value={form.campaignName}
                   onChange={(e) => handleChange("campaignName", e.target.value)}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                  className="w-full bg-white/10 border border-white/10 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
                   placeholder="הקמפיין שלי"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">מטרה</label>
+                <label className="block text-sm font-medium text-white/70 mb-1">מטרה</label>
                 <select
                   value={form.objective}
                   onChange={(e) => handleChange("objective", e.target.value)}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                  className="w-full bg-white/10 border border-white/10 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
                 >
                   {OBJECTIVES.map((o) => (
                     <option key={o} value={o}>{OBJECTIVE_LABELS[o] ?? o}</option>
@@ -327,79 +327,79 @@ export default function LaunchPage() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">תקציב יומי (דולר) *</label>
+                <label className="block text-sm font-medium text-white/70 mb-1">תקציב יומי (דולר) *</label>
                 <input
                   type="number"
                   min="1"
                   value={form.budget}
                   onChange={(e) => handleChange("budget", e.target.value)}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                  className="w-full bg-white/10 border border-white/10 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
                   placeholder="50"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">מזהה חשבון מודעות *</label>
+                <label className="block text-sm font-medium text-white/70 mb-1">מזהה חשבון מודעות *</label>
                 <input
                   type="text"
                   value={form.adAccountId}
                   onChange={(e) => handleChange("adAccountId", e.target.value)}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500 ltr-island"
+                  className="w-full bg-white/10 border border-white/10 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500 ltr-island"
                   placeholder="act_123456789"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">מזהה עמוד פייסבוק *</label>
+                <label className="block text-sm font-medium text-white/70 mb-1">מזהה עמוד פייסבוק *</label>
                 <input
                   type="text"
                   value={form.pageId}
                   onChange={(e) => handleChange("pageId", e.target.value)}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500 ltr-island"
+                  className="w-full bg-white/10 border border-white/10 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500 ltr-island"
                   placeholder="123456789"
                 />
               </div>
 
               <div className="md:col-span-2">
-                <label className="block text-sm font-medium text-gray-300 mb-1">כתובת הסרטון *</label>
+                <label className="block text-sm font-medium text-white/70 mb-1">כתובת הסרטון *</label>
                 <input
                   type="url"
                   value={form.videoUrl}
                   onChange={(e) => handleChange("videoUrl", e.target.value)}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500 ltr-island"
+                  className="w-full bg-white/10 border border-white/10 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500 ltr-island"
                   placeholder="https://..."
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">כותרת</label>
+                <label className="block text-sm font-medium text-white/70 mb-1">כותרת</label>
                 <input
                   type="text"
                   value={form.headline}
                   onChange={(e) => handleChange("headline", e.target.value)}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                  className="w-full bg-white/10 border border-white/10 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
                   placeholder="לרכישה עכשיו"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">תיאור</label>
+                <label className="block text-sm font-medium text-white/70 mb-1">תיאור</label>
                 <input
                   type="text"
                   value={form.description}
                   onChange={(e) => handleChange("description", e.target.value)}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+                  className="w-full bg-white/10 border border-white/10 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
                   placeholder="מבצע לזמן מוגבל"
                 />
               </div>
 
               <div className="md:col-span-2">
-                <label className="block text-sm font-medium text-gray-300 mb-1">כתובת יעד</label>
+                <label className="block text-sm font-medium text-white/70 mb-1">כתובת יעד</label>
                 <input
                   type="url"
                   value={form.targetUrl}
                   onChange={(e) => handleChange("targetUrl", e.target.value)}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500 ltr-island"
+                  className="w-full bg-white/10 border border-white/10 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-violet-500 ltr-island"
                   placeholder="https://yourstore.com/products/..."
                 />
               </div>
@@ -415,7 +415,7 @@ export default function LaunchPage() {
               >
                 {result.message}
                 {result.success && result.data && (
-                  <pre className="mt-2 text-xs text-gray-400 overflow-x-auto">
+                  <pre className="mt-2 text-xs text-white/50 overflow-x-auto">
                     {JSON.stringify(result.data, null, 2)}
                   </pre>
                 )}
@@ -435,7 +435,7 @@ export default function LaunchPage() {
                   setShowClonePanel(false);
                   setResult(null);
                 }}
-                className="px-5 py-2.5 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-medium transition"
+                className="px-5 py-2.5 bg-white/15 hover:bg-white/20 text-white rounded-lg font-medium transition"
               >
                 ביטול
               </button>
@@ -445,23 +445,23 @@ export default function LaunchPage() {
 
         {/* Campaigns Table */}
         {campaigns.length > 0 && (
-          <div className="bg-gray-900 rounded-xl p-6">
+          <div className="bg-white/5 rounded-xl p-6">
             <h2 className="text-lg font-semibold text-white mb-4">כל הקמפיינים</h2>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-gray-800 text-start">
-                    <th className="pb-3 px-4 text-gray-400 font-medium text-start">שם</th>
-                    <th className="pb-3 px-4 text-gray-400 font-medium text-start">סטטוס</th>
-                    <th className="pb-3 px-4 text-gray-400 font-medium text-start">מטרה</th>
-                    <th className="pb-3 px-4 text-gray-400 font-medium text-start">הוצאה</th>
-                    <th className="pb-3 text-gray-400 font-medium text-start">פעולה</th>
+                  <tr className="border-b border-white/10 text-start">
+                    <th className="pb-3 px-4 text-white/50 font-medium text-start">שם</th>
+                    <th className="pb-3 px-4 text-white/50 font-medium text-start">סטטוס</th>
+                    <th className="pb-3 px-4 text-white/50 font-medium text-start">מטרה</th>
+                    <th className="pb-3 px-4 text-white/50 font-medium text-start">הוצאה</th>
+                    <th className="pb-3 text-white/50 font-medium text-start">פעולה</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-800">
+                <tbody className="divide-y divide-white/10">
                   {campaigns.map((c) => (
-                    <tr key={c.id} className="hover:bg-gray-800/50 transition">
-                      <td className="py-3 px-4 text-gray-200 font-medium">{c.name}</td>
+                    <tr key={c.id} className="hover:bg-white/10 transition">
+                      <td className="py-3 px-4 text-white/80 font-medium">{c.name}</td>
                       <td className="py-3 px-4">
                         <span
                           className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${
@@ -469,14 +469,14 @@ export default function LaunchPage() {
                               ? "bg-green-900/50 text-green-400"
                               : c.status === "PAUSED"
                               ? "bg-yellow-900/50 text-yellow-400"
-                              : "bg-gray-700 text-gray-400"
+                              : "bg-white/15 text-white/50"
                           }`}
                         >
                           {c.status}
                         </span>
                       </td>
-                      <td className="py-3 px-4 text-gray-400">{c.objective ? (OBJECTIVE_LABELS[c.objective] ?? c.objective) : "·"}</td>
-                      <td className="py-3 px-4 text-gray-400">
+                      <td className="py-3 px-4 text-white/50">{c.objective ? (OBJECTIVE_LABELS[c.objective] ?? c.objective) : "·"}</td>
+                      <td className="py-3 px-4 text-white/50">
                         {c.insights?.spend != null ? `$${c.insights.spend}` : "·"}
                       </td>
                       <td className="py-3">
