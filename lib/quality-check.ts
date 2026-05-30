@@ -1,12 +1,16 @@
 // Vision-based judge for the final ad video.
 //
-// Loop semantics (used by /api/quality-check + autopilot UI):
-//   1. Extract a representative frame from the final video (ffmpeg-static).
-//   2. Score it against the product photo + script via Claude Vision
+// Loop semantics (used by /api/quality-check + the showcase state machine):
+//   1. Extract N representative frames from the final video (ffmpeg-static).
+//      Default = 3 frames sampled at 10%/50%/90% of the clip.
+//   2. Score each frame against the product photo + script via Claude Vision
 //      (rateVideoRealism — see lib/vision-check.ts).
-//   3. If score < threshold (default 7) AND retries remaining, return
-//      `retry: true` so the caller can re-trigger the animate stage with a
-//      stricter prompt + different model. Retry cap = 2 to bound cost.
+//   3. Worst frame drives the verdict — a single frame full of AI tells is
+//      a fail even if the others are clean.
+//   4. If worst score < threshold (default 7) AND retries remaining, return
+//      `retry: true`. Retry cap = 2 to bound cost.
+//   5. Optionally persist the full record (per-frame URLs + scores) to a
+//      Vercel Blob under /quality-log/ so a later cron can analyze drift.
 //
 // This file is the canonical surface — callers should import from here
 // rather than from vision-check.ts directly.
@@ -29,70 +33,152 @@ export interface QualityCheckInput {
   attempt?: number;
   /** Hard cap on total attempts (initial + retries). Default 2. */
   maxAttempts?: number;
+  /** How many frames to sample. Default 3 (10%/50%/90% of duration). */
+  frameCount?: number;
+  /** Override sample positions in (0,1). Length must equal frameCount when both set. */
+  framePositions?: number[];
+  /** Persist the per-frame record to Vercel Blob under /quality-log/. */
+  persistLog?: boolean;
+  /** Caller-supplied tag (e.g. "showcase:montier:ring-7") for the log key. */
+  logTag?: string;
 }
 
-export interface QualityCheckOutput extends VideoQualityResult {
+export interface FrameJudgement extends VideoQualityResult {
+  /** Where in the clip we sampled (seconds). */
+  atSec: number;
+  /** Sampled-frame URL (Vercel Blob jpeg). */
+  frameUrl: string;
+}
+
+export interface QualityCheckOutput {
+  /** Worst score across all sampled frames — drives the retry verdict. */
+  score: number;
+  /** Reasons union'd from every frame judgement, top 6 surfaced. */
+  reasons: string[];
+  retry: boolean;
+  /** Per-frame breakdown, in chronological order. */
+  frames: FrameJudgement[];
   attempt: number;
   maxAttempts: number;
   threshold: number;
-  /** Frame URL we judged (useful for debugging). */
+  /** Backwards-compat alias — URL of the worst-scoring frame. */
   frameUrl?: string;
+  /** Backwards-compat alias — six-criterion breakdown of the worst frame. */
+  details?: FrameJudgement["details"];
+  /** Blob URL where the JSON record was persisted, if persistLog was true. */
+  logUrl?: string;
 }
 
 const DEFAULT_MAX_ATTEMPTS = 2;
 const DEFAULT_THRESHOLD = 7;
+const DEFAULT_FRAME_COUNT = 3;
+const DEFAULT_FRAME_POSITIONS = [0.1, 0.5, 0.9];
 
 export async function checkVideoQuality(input: QualityCheckInput): Promise<QualityCheckOutput> {
   const threshold = input.threshold ?? DEFAULT_THRESHOLD;
   const attempt = input.attempt ?? 1;
   const maxAttempts = input.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+  const frameCount = Math.max(1, Math.min(6, input.frameCount ?? DEFAULT_FRAME_COUNT));
+  const positions =
+    input.framePositions && input.framePositions.length === frameCount
+      ? input.framePositions
+      : defaultPositions(frameCount);
 
-  let frameUrl: string | undefined;
+  // Frame extraction is a soft dependency — if it fails entirely we pass.
+  let frames: { atSec: number; url: string }[] = [];
   try {
-    frameUrl = await extractAndUploadFrame(input.videoUrl);
+    frames = await extractAndUploadFrames(input.videoUrl, positions);
   } catch (e) {
-    // Frame extraction is a soft dependency — degrade to scoring the
-    // video URL itself (anthropic can also follow http(s) for jpeg frames
-    // hosted by Replicate/FAL, but most return mp4 only). If extraction
-    // failed and we have no frame, return a permissive pass so we don't
-    // block the pipeline.
-    console.warn("[quality-check] frame extraction failed:", e instanceof Error ? e.message : e);
+    console.warn("[quality-check] frame extraction failed:", errMsg(e));
     return {
       score: 10,
-      reasons: [`frame extraction failed: ${e instanceof Error ? e.message : e}`],
+      reasons: [`frame extraction failed: ${errMsg(e)}`],
       retry: false,
+      frames: [],
       attempt,
       maxAttempts,
       threshold,
     };
   }
 
-  const judged = await rateVideoRealism({
-    frameUrl,
-    productUrl: input.productImageUrl,
-    script: input.script,
-    threshold,
-  });
+  // Score each frame in parallel — independent Anthropic calls.
+  const judged = await Promise.all(
+    frames.map(async (f) => {
+      const r = await rateVideoRealism({
+        frameUrl: f.url,
+        productUrl: input.productImageUrl,
+        script: input.script,
+        threshold,
+      });
+      const judgement: FrameJudgement = { ...r, atSec: f.atSec, frameUrl: f.url };
+      return judgement;
+    })
+  );
 
-  // Override retry decision against the attempt cap.
-  const wouldRetry = judged.score < threshold;
+  // Worst frame drives the verdict.
+  const score = judged.reduce((min, j) => Math.min(min, j.score), Infinity);
+  const reasons = dedupeStrings(judged.flatMap((j) => j.reasons)).slice(0, 6);
+  const wouldRetry = score < threshold;
   const canRetry = attempt < maxAttempts;
 
-  return {
-    ...judged,
+  // Pick the worst-scoring frame for the backwards-compat alias fields.
+  const worst = judged.reduce<FrameJudgement | undefined>(
+    (acc, j) => (acc === undefined || j.score < acc.score ? j : acc),
+    undefined
+  );
+
+  const out: QualityCheckOutput = {
+    score: Number.isFinite(score) ? score : 10,
+    reasons,
     retry: wouldRetry && canRetry,
+    frames: judged,
     attempt,
     maxAttempts,
     threshold,
-    frameUrl,
+    frameUrl: worst?.frameUrl,
+    details: worst?.details,
   };
+
+  if (input.persistLog) {
+    try {
+      out.logUrl = await persistQualityLog(out, input);
+    } catch (e) {
+      console.warn("[quality-check] log persistence failed:", errMsg(e));
+    }
+  }
+
+  return out;
+}
+
+function defaultPositions(n: number): number[] {
+  if (n === DEFAULT_FRAME_COUNT) return DEFAULT_FRAME_POSITIONS;
+  if (n === 1) return [0.5];
+  // Evenly spaced sampling avoiding the very first/last frame which can be
+  // black or a fade.
+  const step = 0.8 / (n - 1);
+  return Array.from({ length: n }, (_, i) => 0.1 + step * i);
+}
+
+function dedupeStrings(arr: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const s of arr) {
+    const key = s.trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(s.trim());
+  }
+  return out;
 }
 
 // ---- frame extraction ----------------------------------------------------
 
-async function extractAndUploadFrame(videoUrl: string): Promise<string> {
+async function extractAndUploadFrames(
+  videoUrl: string,
+  positions: number[]
+): Promise<{ atSec: number; url: string }[]> {
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    throw new Error("BLOB_READ_WRITE_TOKEN not set — needed to host the extracted frame");
+    throw new Error("BLOB_READ_WRITE_TOKEN not set — needed to host extracted frames");
   }
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const ffmpegPath = require("ffmpeg-static") as string | null;
@@ -104,29 +190,99 @@ async function extractAndUploadFrame(videoUrl: string): Promise<string> {
     if (!res.ok) throw new Error(`fetch ${videoUrl}: HTTP ${res.status}`);
     const buf = Buffer.from(await res.arrayBuffer());
     const inPath = path.join(workDir, "in.mp4");
-    const outPath = path.join(workDir, "frame.jpg");
     await writeFile(inPath, buf);
 
-    // Pull a frame near the middle of the clip — most representative.
-    await runFfmpeg(ffmpegPath, [
-      "-y",
-      "-ss", "2",
-      "-i", inPath,
-      "-frames:v", "1",
-      "-q:v", "3",
-      outPath,
-    ]);
+    // Probe duration so we can convert fractional positions to seconds. We
+    // use ffmpeg's own format-detection pass — no separate ffprobe binary.
+    const duration = await probeDuration(ffmpegPath, inPath);
 
-    const jpg = await readFile(outPath);
-    const blob = await put(`frames/${Date.now()}.jpg`, jpg, {
-      access: "public",
-      contentType: "image/jpeg",
-      addRandomSuffix: true,
-    });
-    return blob.url;
+    const out: { atSec: number; url: string }[] = [];
+    for (let i = 0; i < positions.length; i++) {
+      const pos = Math.max(0, Math.min(1, positions[i]));
+      const atSec = duration ? Math.max(0, duration * pos) : 1 + i; // fallback when probe fails
+      const jpgPath = path.join(workDir, `frame-${i}.jpg`);
+      try {
+        await runFfmpeg(ffmpegPath, [
+          "-y",
+          "-ss", String(atSec),
+          "-i", inPath,
+          "-frames:v", "1",
+          "-q:v", "3",
+          jpgPath,
+        ]);
+        const jpg = await readFile(jpgPath);
+        const blob = await put(`frames/${Date.now()}-${i}.jpg`, jpg, {
+          access: "public",
+          contentType: "image/jpeg",
+          addRandomSuffix: true,
+        });
+        out.push({ atSec, url: blob.url });
+      } catch (e) {
+        console.warn(`[quality-check] frame ${i} at ${atSec.toFixed(2)}s failed:`, errMsg(e));
+      }
+    }
+    if (out.length === 0) throw new Error("no frames could be extracted");
+    return out;
   } finally {
     await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
   }
+}
+
+async function probeDuration(ffmpegPath: string, inPath: string): Promise<number | null> {
+  // Parse ffmpeg's stderr line "Duration: HH:MM:SS.ss,". We don't need ffprobe.
+  return new Promise((resolve) => {
+    const proc = spawn(ffmpegPath, ["-hide_banner", "-i", inPath], {
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let stderr = "";
+    proc.stderr.on("data", (d) => { stderr += d.toString(); });
+    proc.on("close", () => {
+      const m = stderr.match(/Duration:\s+(\d+):(\d+):(\d+(?:\.\d+)?)/);
+      if (!m) return resolve(null);
+      const h = parseInt(m[1], 10);
+      const min = parseInt(m[2], 10);
+      const s = parseFloat(m[3]);
+      resolve(h * 3600 + min * 60 + s);
+    });
+    proc.on("error", () => resolve(null));
+  });
+}
+
+// ---- log persistence -----------------------------------------------------
+
+async function persistQualityLog(
+  out: QualityCheckOutput,
+  input: QualityCheckInput
+): Promise<string> {
+  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    throw new Error("BLOB_READ_WRITE_TOKEN not set");
+  }
+  const tag = (input.logTag || "anon")
+    .replace(/[^a-z0-9\-:_]/gi, "_")
+    .slice(0, 80);
+  const key = `quality-log/${tag}/${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+  const record = {
+    when: new Date().toISOString(),
+    videoUrl: input.videoUrl,
+    productImageUrl: input.productImageUrl,
+    script: input.script,
+    threshold: out.threshold,
+    score: out.score,
+    reasons: out.reasons,
+    frames: out.frames.map((f) => ({
+      atSec: f.atSec,
+      frameUrl: f.frameUrl,
+      score: f.score,
+      reasons: f.reasons,
+      details: f.details,
+    })),
+  };
+  const blob = await put(key, JSON.stringify(record, null, 2), {
+    access: "public",
+    contentType: "application/json",
+    addRandomSuffix: true,
+  });
+  return blob.url;
 }
 
 function runFfmpeg(bin: string, args: string[]): Promise<void> {
@@ -140,4 +296,8 @@ function runFfmpeg(bin: string, args: string[]): Promise<void> {
       else reject(new Error(`ffmpeg exited ${code}: ${stderr.slice(-1500)}`));
     });
   });
+}
+
+function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
 }
