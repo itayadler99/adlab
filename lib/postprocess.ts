@@ -50,6 +50,12 @@ export interface RealismIntensity {
   saturation?: number;
   /** Unsharp amount 0-1.5. Default 0.7. */
   sharpen?: number;
+  /**
+   * Subtle handheld shake to break "tripod feel". 0-1, default 0 (off).
+   * Values translate to rotation amplitude (radians) and inner crop %.
+   * 0.5 → ~0.3° wobble at ~0.7 Hz, 2% crop.
+   */
+  shake?: number;
 }
 
 export interface PostProcessOpts {
@@ -97,6 +103,7 @@ const DEFAULT_INTENSITY: Required<RealismIntensity> = {
   halation: 0.18,
   saturation: 1.05,
   sharpen: 0.7,
+  shake: 0,
 };
 
 function resolveIntensity(override?: RealismIntensity): Required<RealismIntensity> {
@@ -105,6 +112,7 @@ function resolveIntensity(override?: RealismIntensity): Required<RealismIntensit
     halation: clamp(override?.halation ?? DEFAULT_INTENSITY.halation, 0, 0.6),
     saturation: clamp(override?.saturation ?? DEFAULT_INTENSITY.saturation, 0.8, 1.3),
     sharpen: clamp(override?.sharpen ?? DEFAULT_INTENSITY.sharpen, 0, 1.5),
+    shake: clamp(override?.shake ?? DEFAULT_INTENSITY.shake, 0, 1),
   };
 }
 
@@ -287,15 +295,22 @@ function buildFilterComplex(opts: {
   intensity: Required<RealismIntensity>;
   lutPath?: string;
 }): string {
-  const { grain, halation, saturation, sharpen } = opts.intensity;
+  const { grain, halation, saturation, sharpen, shake } = opts.intensity;
   const colorGrade = opts.lutPath
     ? `lut3d=file=${escapeFilterArg(opts.lutPath)}`
     : "curves=r='0/0 0.5/0.55 1/1':b='0/0.05 0.5/0.45 1/0.95'";
+
+  // Subtle camera shake — rotation oscillation + inner crop to hide edges.
+  // Inactive when shake == 0.
+  const shakeFilter = shake > 0
+    ? `,rotate=a='${(0.006 * shake).toFixed(4)}*sin(2*PI*t*0.7)':c=none:bilinear=1,crop=iw*${(1 - 0.02 * shake).toFixed(4)}:ih*${(1 - 0.02 * shake).toFixed(4)}`
+    : "";
+
   return [
     "[0:v]split=2[base][glow]",
     "[glow]gblur=sigma=8,eq=brightness=0.04[bloom]",
     `[base]noise=alls=${grain}:allf=t,${colorGrade},eq=saturation=${saturation}[graded]`,
-    `[graded][bloom]blend=all_mode=screen:all_opacity=${halation},unsharp=5:5:${sharpen}[v]`,
+    `[graded][bloom]blend=all_mode=screen:all_opacity=${halation},unsharp=5:5:${sharpen}${shakeFilter}[v]`,
   ].join(";");
 }
 

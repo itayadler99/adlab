@@ -33,8 +33,13 @@ const CANONICAL_FPS = 30;
 
 export interface StitchInput {
   urls: string[];
-  /** Per-clip duration override (seconds). Only used by the FAL tier. */
-  clipSeconds?: number;
+  /**
+   * Per-clip duration override (seconds). Only used by the FAL tier.
+   * - number   → every clip is assumed to be this length.
+   * - number[] → length per clip (must match urls.length).
+   * Tier 3 (ffmpeg-static) probes real durations and ignores this.
+   */
+  clipSeconds?: number | number[];
 }
 
 export interface StitchTrace {
@@ -138,13 +143,17 @@ async function preflightUrls(urls: string[]): Promise<boolean> {
 
 async function stitchViaFal(input: StitchInput): Promise<string> {
   if (!FAL_KEY) throw new Error("FAL_KEY not set");
-  const clipSec = input.clipSeconds ?? 8;
-  const clipMs = clipSec * 1000;
-  const keyframes = input.urls.map((url, i) => ({
-    timestamp: i * clipMs,
-    url,
-    duration: clipMs,
-  }));
+  // Build per-clip durations. Accepts a single number ("all clips this long")
+  // or a per-clip array — the latter is how the sequence orchestrator should
+  // pass durations when chained Kling/Seedance clips have different lengths.
+  const perClipSec = perClipDurations(input);
+  let cursor = 0;
+  const keyframes = input.urls.map((url, i) => {
+    const durMs = perClipSec[i] * 1000;
+    const kf = { timestamp: cursor, url, duration: durMs };
+    cursor += durMs;
+    return kf;
+  });
   const tracks = [{ id: "main", type: "video", keyframes }];
   const result = await fal.subscribe(FAL_ENDPOINT, { input: { tracks }, logs: false });
   const data = (result as { data?: Record<string, unknown> }).data || {};
@@ -152,6 +161,20 @@ async function stitchViaFal(input: StitchInput): Promise<string> {
   const url = video?.url || (data.url as string | undefined);
   if (!url) throw new Error("FAL compose returned no video URL");
   return url;
+}
+
+function perClipDurations(input: StitchInput): number[] {
+  const n = input.urls.length;
+  if (Array.isArray(input.clipSeconds)) {
+    if (input.clipSeconds.length !== n) {
+      throw new Error(
+        `clipSeconds array length ${input.clipSeconds.length} does not match urls length ${n}`
+      );
+    }
+    return input.clipSeconds.map((s) => Math.max(1, Math.round(s)));
+  }
+  const fallback = typeof input.clipSeconds === "number" ? input.clipSeconds : 8;
+  return new Array(n).fill(Math.max(1, Math.round(fallback)));
 }
 
 // ---- Tier 2: Replicate lucataco/ffmpeg-concat -----------------------------
@@ -357,6 +380,36 @@ function runFfmpeg(bin: string, args: string[]): Promise<void> {
       else reject(new Error(`ffmpeg exited ${code}: ${stderr.slice(-2000)}`));
     });
   });
+}
+
+// ---- diagnostics ----------------------------------------------------------
+
+export interface StitchHealth {
+  fal: { configured: boolean };
+  replicate: { configured: boolean };
+  ffmpegStatic: { available: boolean; bin: string | null };
+  blob: { configured: boolean };
+}
+
+/**
+ * Returns which tiers of the stitch fallback chain are wired up. Useful as
+ * a health probe — if every tier is down we can fail fast before queueing
+ * an autopilot run. Doesn't fetch network — pure introspection.
+ */
+export function stitchHealth(): StitchHealth {
+  let bin: string | null = null;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    bin = (require("ffmpeg-static") as string | null) || null;
+  } catch {
+    bin = null;
+  }
+  return {
+    fal: { configured: Boolean(FAL_KEY) },
+    replicate: { configured: Boolean(process.env.REPLICATE_API_TOKEN) },
+    ffmpegStatic: { available: bin != null, bin },
+    blob: { configured: Boolean(process.env.BLOB_READ_WRITE_TOKEN) },
+  };
 }
 
 // ---- helpers ---------------------------------------------------------------
