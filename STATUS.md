@@ -470,3 +470,16 @@ Gap list (meta+learn+klaviyo+stores+cron):
 - `uploadImageFromUrl` now throws on fetch/Meta error instead of returning a
   broken payload. All create/upload fns accept an optional `accountId`.
 - `tsc --noEmit` clean.
+
+### Batch B — multi-store launches + centralized Hebrew copy ✅
+- `app/api/launch/route.ts` + `app/api/abtest/route.ts`: accept `store_id`,
+  resolve via `getStore`, and thread the store's `adAccountId` / `pageId` /
+  `defaultLink` through every Meta create call (campaign/adset/video/creative/
+  ad). Launches now land in the correct store's ad account instead of always
+  the global one. Both still create everything PAUSED.
+- Both launch paths now `waitForVideoReady()` before building the creative.
+- New `lib/copy.ts`: `sanitizeHebrew()` (dash → comma) + `validateHebrew()`
+  (flags specific dates and English-in-Hebrew as warnings). Launch + headlines
+  routes use it; the local sanitize copies were removed.
+- `saveCampaign` now records `store_id` + `ad_account_id`.
+- `tsc --noEmit` clean.

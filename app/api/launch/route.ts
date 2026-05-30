@@ -1,19 +1,35 @@
 import { NextResponse } from "next/server";
-import { createAd, createAdset, createCampaign, createVideoCreative, uploadVideoFromUrl } from "@/lib/meta";
+import {
+  createAd,
+  createAdset,
+  createCampaign,
+  createVideoCreative,
+  uploadVideoFromUrl,
+  waitForVideoReady,
+} from "@/lib/meta";
 import { writeHeadlines } from "@/lib/anthropic";
+import { getStore } from "@/lib/stores";
+import { sanitizeHebrew } from "@/lib/copy";
 import { saveCampaign } from "@/lib/db";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
-
-// Em/en dash → comma; collapse a stray sentence-hyphen too (Itay copy rule).
-function sanitizeHeadline(h: string): string {
-  return h.replace(/\s*[—–]\s*/g, ", ").replace(/\s*-\s+/g, ", ").replace(/\s{2,}/g, " ").trim();
-}
+export const maxDuration = 120;
 
 export async function POST(req: Request) {
   try {
     const b = await req.json();
+
+    // Multi-store: resolve the selected store so the launch lands in the right
+    // ad account / page / link instead of always the global account.
+    const store = b.store_id ? getStore(b.store_id) : undefined;
+    if (b.store_id && !store) {
+      return NextResponse.json({ error: `unknown store_id: ${b.store_id}` }, { status: 400 });
+    }
+    const accountId = b.ad_account_id || store?.adAccountId || undefined;
+    const pageId = b.page_id || store?.pageId;
+    const link = b.link || store?.defaultLink;
+    if (!pageId) return NextResponse.json({ error: "page_id (or a configured store) required" }, { status: 400 });
+    if (!link) return NextResponse.json({ error: "link (or a configured store) required" }, { status: 400 });
 
     // Headline variants: when no message is supplied, auto-generate 3 in Itay's
     // Hebrew style and use the first as the primary text. All 3 are returned so
@@ -27,14 +43,14 @@ export async function POST(req: Request) {
           productDescription: b.product_description || b.productDescription,
           language: b.language || "he",
         });
-        headlines = (res.headlines || []).map(sanitizeHeadline).filter(Boolean).slice(0, 3);
+        headlines = (res.headlines || []).map((h) => sanitizeHebrew(h)).filter(Boolean).slice(0, 3);
         message = headlines[0] ?? "";
       } catch {
         /* non-fatal — launch proceeds with whatever message was provided */
       }
     }
 
-    const campaign = await createCampaign({ name: b.name, status: "PAUSED" });
+    const campaign = await createCampaign({ name: b.name, status: "PAUSED", accountId });
     if (!campaign.id) throw new Error("Campaign create failed: " + JSON.stringify(campaign));
 
     const adset = await createAdset({
@@ -44,23 +60,27 @@ export async function POST(req: Request) {
       countries: b.countries,
       age_min: b.age_min,
       age_max: b.age_max,
-      page_id: b.page_id,
+      page_id: pageId,
       pixel_id: b.pixel_id,
       custom_event_type: "PURCHASE",
       status: "PAUSED",
+      accountId,
     });
     if (!adset.id) throw new Error("Adset create failed: " + JSON.stringify(adset));
 
-    const video = await uploadVideoFromUrl(b.video_url, b.name);
+    const video = await uploadVideoFromUrl(b.video_url, b.name, accountId);
     if (!video.id) throw new Error("Video upload failed: " + JSON.stringify(video));
+    // Wait for Meta to finish processing before building the creative.
+    await waitForVideoReady(video.id);
 
     const creative = await createVideoCreative({
       name: b.name + " · creative",
-      page_id: b.page_id,
+      page_id: pageId,
       video_id: video.id,
       thumbnail_url: b.thumbnail_url,
       message,
-      link: b.link,
+      link,
+      accountId,
     });
     if (!creative.id) throw new Error("Creative create failed: " + JSON.stringify(creative));
 
@@ -69,6 +89,7 @@ export async function POST(req: Request) {
       adset_id: adset.id,
       creative_id: creative.id,
       status: "PAUSED",
+      accountId,
     });
     if (!ad.id) throw new Error("Ad create failed: " + JSON.stringify(ad));
 
@@ -81,6 +102,8 @@ export async function POST(req: Request) {
       video_url: b.video_url,
       daily_budget: b.daily_budget,
       countries: b.countries,
+      store_id: store?.id,
+      ad_account_id: accountId,
     });
 
     return NextResponse.json({
@@ -89,6 +112,8 @@ export async function POST(req: Request) {
       video_id: video.id,
       creative_id: creative.id,
       ad_id: ad.id,
+      store_id: store?.id,
+      ad_account_id: accountId,
       headlines,
       primary_text: message,
       message: "Created paused. Activate in Ads Manager.",
