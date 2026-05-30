@@ -441,3 +441,32 @@ blocked by the env network allowlist (see BLOCKERS.md), so verification here is
 - Always read lifetime + 7d + 30d (`date_preset=maximum`/`last_7d`/`last_30d`).
 - Kill rule = 0 purchases lifetime + spend > ₪200, with learning-phase context
   (daysRunning in the alert) and opt-in auto-pause.
+
+---
+
+## Phase M2 — production hardening (Terminal 3). Found 10 new gaps; building.
+
+Gap list (meta+learn+klaviyo+stores+cron):
+1. Multi-store half-wired — launches always hit the global ad account (meta.ts
+   `adAccount()` ignored per-store config). [Batch B]
+2. No rate-limit/transient retry in metaGet/metaPost. [Batch A ✅]
+3. Video-not-ready before creative creation → creative create can fail. [Batch A ✅]
+4. uploadImageFromUrl returned raw json with no error check. [Batch A ✅]
+5. Winner judgment ignores learning phase (no min-conversions/days gate). [Batch C]
+6. getCampaigns capped at 100, no pagination. [Batch A ✅]
+7. No persisted audit log of ROAS scans / kills. [Batch C — lib/learn.ts]
+8. Klaviyo wrapper thin + email is LTR (wrong for Hebrew). [Batch D]
+9. Hebrew copy sanitize lives only in the launch route, not reused. [Batch D — lib/copy.ts]
+10. check-ab-winners decides on any spend, no min-data gate. [Batch E]
+
+### Batch A — meta.ts robustness ✅
+- `metaFetch()` retry wrapper: exponential backoff (1/2/4s) on HTTP 429/5xx,
+  network blips, and Meta transient/rate-limit error codes (1,2,4,17,32,341,
+  368,613,80000-80004). metaGet/metaPost route through it.
+- `getCampaigns()` now follows `paging.next` (up to 20 pages) and accepts an
+  optional `accountId` for multi-store scans.
+- `waitForVideoReady(videoId)` polls `/{id}?fields=status` until `ready`
+  (fails open after 120s so a slow encode can't hard-block a launch).
+- `uploadImageFromUrl` now throws on fetch/Meta error instead of returning a
+  broken payload. All create/upload fns accept an optional `accountId`.
+- `tsc --noEmit` clean.

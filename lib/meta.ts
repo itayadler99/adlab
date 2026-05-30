@@ -6,37 +6,76 @@ function token() {
   if (!t) throw new Error("META_ACCESS_TOKEN not set");
   return t;
 }
-function adAccount() {
-  return process.env.META_AD_ACCOUNT_ID || "act_2312364629134701";
+function adAccount(accountId?: string) {
+  return accountId || process.env.META_AD_ACCOUNT_ID || "act_2312364629134701";
+}
+
+// Meta error codes that are transient / rate-limit related and worth retrying.
+const RETRYABLE_CODES = new Set([1, 2, 4, 17, 32, 341, 368, 613, 80000, 80001, 80002, 80003, 80004]);
+const MAX_RETRIES = 3;
+
+function isRetryable(status: number, err?: { code?: number; is_transient?: boolean }): boolean {
+  if (status === 429 || status === 500 || status === 502 || status === 503 || status === 504) return true;
+  if (err?.is_transient) return true;
+  if (err?.code != null && RETRYABLE_CODES.has(err.code)) return true;
+  return false;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function metaFetch<T>(url: string, init?: RequestInit, label = "Meta API"): Promise<T> {
+  let lastErr: Error | null = null;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(url, init);
+    } catch (networkErr) {
+      // Network blip — retry with backoff
+      lastErr = networkErr instanceof Error ? networkErr : new Error(String(networkErr));
+      if (attempt < MAX_RETRIES) {
+        await sleep(1000 * 2 ** attempt);
+        continue;
+      }
+      throw lastErr;
+    }
+    let json: any;
+    try {
+      json = await res.json();
+    } catch {
+      json = null;
+    }
+    if (res.ok && !(json && json.error)) return json as T;
+
+    const err = json?.error;
+    if (isRetryable(res.status, err) && attempt < MAX_RETRIES) {
+      await sleep(1000 * 2 ** attempt);
+      continue;
+    }
+    const msg = err?.message || `${label} failed ${res.status}`;
+    throw new Error(`Meta API: ${msg}`);
+  }
+  throw lastErr || new Error(`${label} failed after retries`);
 }
 
 export async function metaGet<T = any>(path: string, params: Record<string, string | number> = {}): Promise<T> {
   const url = new URL(`${BASE}${path}`);
   url.searchParams.set("access_token", token());
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
-  const res = await fetch(url.toString());
-  const json = await res.json();
-  if (!res.ok || (json && json.error)) {
-    const msg = json?.error?.message || `Meta GET ${path} failed ${res.status}`;
-    throw new Error(`Meta API: ${msg}`);
-  }
-  return json;
+  return metaFetch<T>(url.toString(), undefined, `Meta GET ${path}`);
 }
 
 export async function metaPost<T = any>(path: string, body: Record<string, any> = {}): Promise<T> {
   const url = new URL(`${BASE}${path}`);
   url.searchParams.set("access_token", token());
-  const res = await fetch(url.toString(), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const json = await res.json();
-  if (!res.ok || (json && json.error)) {
-    const msg = json?.error?.message || `Meta POST ${path} failed ${res.status}`;
-    throw new Error(`Meta API: ${msg}`);
-  }
-  return json;
+  return metaFetch<T>(
+    url.toString(),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+    `Meta POST ${path}`
+  );
 }
 
 export interface Campaign {
@@ -113,7 +152,8 @@ export function spendOf(row?: InsightRow | null): number {
 }
 
 export async function getCampaigns(
-  statusFilter: "ACTIVE" | "PAUSED" | "ALL" = "ALL"
+  statusFilter: "ACTIVE" | "PAUSED" | "ALL" = "ALL",
+  accountId?: string
 ): Promise<Campaign[]> {
   const params: Record<string, string> = {
     fields: "id,name,status,effective_status,objective,daily_budget,lifetime_budget,created_time",
@@ -122,8 +162,24 @@ export async function getCampaigns(
   if (statusFilter !== "ALL") {
     params.effective_status = JSON.stringify([statusFilter]);
   }
-  const json = await metaGet<{ data?: Campaign[] }>(`/${adAccount()}/campaigns`, params);
-  return json.data ?? [];
+  // Follow pagination so accounts with >100 campaigns are fully scanned.
+  const out: Campaign[] = [];
+  let json = await metaGet<{ data?: Campaign[]; paging?: { next?: string } }>(
+    `/${adAccount(accountId)}/campaigns`,
+    params
+  );
+  out.push(...(json.data ?? []));
+  let guard = 0;
+  while (json.paging?.next && guard < 20) {
+    guard++;
+    json = await metaFetch<{ data?: Campaign[]; paging?: { next?: string } }>(
+      json.paging.next,
+      undefined,
+      "Meta GET campaigns(page)"
+    );
+    out.push(...(json.data ?? []));
+  }
+  return out;
 }
 
 /** Single-window insight rows for one campaign. Unwraps Meta's `{data}` envelope. */
@@ -165,9 +221,10 @@ export async function getCampaignInsightsMulti(
 
 /** Account-level insights broken down by campaign, keyed by campaign_id. One API call. */
 export async function getAccountCampaignInsights(
-  datePreset = "last_7d"
+  datePreset = "last_7d",
+  accountId?: string
 ): Promise<Record<string, InsightRow>> {
-  const json = await metaGet<{ data?: InsightRow[] }>(`/${adAccount()}/insights`, {
+  const json = await metaGet<{ data?: InsightRow[] }>(`/${adAccount(accountId)}/insights`, {
     level: "campaign",
     fields: `campaign_id,${INSIGHT_FIELDS}`,
     date_preset: datePreset,
@@ -193,8 +250,9 @@ export async function createCampaign(opts: {
   objective?: string;
   status?: "ACTIVE" | "PAUSED";
   daily_budget?: number;
+  accountId?: string;
 }) {
-  return metaPost(`/${adAccount()}/campaigns`, {
+  return metaPost(`/${adAccount(opts.accountId)}/campaigns`, {
     name: opts.name,
     objective: opts.objective || "OUTCOME_SALES",
     status: opts.status || "PAUSED",
@@ -214,13 +272,14 @@ export async function createAdset(opts: {
   pixel_id?: string;
   custom_event_type?: string;
   status?: "ACTIVE" | "PAUSED";
+  accountId?: string;
 }) {
   const targeting = {
     geo_locations: { countries: opts.countries || ["US"] },
     age_min: opts.age_min || 18,
     age_max: opts.age_max || 65,
   };
-  return metaPost(`/${adAccount()}/adsets`, {
+  return metaPost(`/${adAccount(opts.accountId)}/adsets`, {
     name: opts.name,
     campaign_id: opts.campaign_id,
     daily_budget: opts.daily_budget * 100,
@@ -235,22 +294,56 @@ export async function createAdset(opts: {
   });
 }
 
-export async function uploadVideoFromUrl(videoUrl: string, name?: string) {
-  return metaPost(`/${adAccount()}/advideos`, {
+export async function uploadVideoFromUrl(videoUrl: string, name?: string, accountId?: string) {
+  return metaPost(`/${adAccount(accountId)}/advideos`, {
     file_url: videoUrl,
     name: name || `adlab-${Date.now()}`,
   });
 }
 
-export async function uploadImageFromUrl(imageUrl: string) {
+/**
+ * Poll a freshly uploaded video until Meta finishes processing. Creating a
+ * creative against a not-ready video fails, so callers should await this first.
+ * Fails open (resolves) after the timeout so a slow encode doesn't hard-block.
+ */
+export async function waitForVideoReady(
+  videoId: string,
+  opts: { timeoutMs?: number; intervalMs?: number } = {}
+): Promise<{ ready: boolean; status: string }> {
+  const timeoutMs = opts.timeoutMs ?? 120000;
+  const intervalMs = opts.intervalMs ?? 5000;
+  const deadline = Date.now() + timeoutMs;
+  let status = "unknown";
+  while (Date.now() < deadline) {
+    try {
+      const j = await metaGet<{ status?: { video_status?: string } }>(`/${videoId}`, {
+        fields: "status",
+      });
+      status = j.status?.video_status || "unknown";
+      if (status === "ready") return { ready: true, status };
+      if (status === "error") return { ready: false, status };
+    } catch {
+      /* transient — keep polling until deadline */
+    }
+    await sleep(intervalMs);
+  }
+  return { ready: false, status };
+}
+
+export async function uploadImageFromUrl(imageUrl: string, accountId?: string) {
   // Meta image upload requires file/bytes — fetch then re-post as multipart
   const img = await fetch(imageUrl);
+  if (!img.ok) throw new Error(`Image fetch failed ${img.status} for ${imageUrl}`);
   const buf = Buffer.from(await img.arrayBuffer());
   const form = new FormData();
   form.append("source", new Blob([buf]), "image.jpg");
   form.append("access_token", token());
-  const res = await fetch(`${BASE}/${adAccount()}/adimages`, { method: "POST", body: form });
-  return res.json();
+  const res = await fetch(`${BASE}/${adAccount(accountId)}/adimages`, { method: "POST", body: form });
+  const json = await res.json();
+  if (!res.ok || json?.error) {
+    throw new Error(`Meta API: ${json?.error?.message || `image upload failed ${res.status}`}`);
+  }
+  return json;
 }
 
 export async function createVideoCreative(opts: {
@@ -261,6 +354,7 @@ export async function createVideoCreative(opts: {
   message: string;
   link: string;
   cta_type?: string;
+  accountId?: string;
 }) {
   const video_data: Record<string, unknown> = {
     video_id: opts.video_id,
@@ -274,7 +368,7 @@ export async function createVideoCreative(opts: {
   if (opts.thumbnail_url && opts.thumbnail_url.startsWith("http")) {
     video_data.image_url = opts.thumbnail_url;
   }
-  return metaPost(`/${adAccount()}/adcreatives`, {
+  return metaPost(`/${adAccount(opts.accountId)}/adcreatives`, {
     name: opts.name,
     object_story_spec: {
       page_id: opts.page_id,
@@ -288,8 +382,9 @@ export async function createAd(opts: {
   adset_id: string;
   creative_id: string;
   status?: "ACTIVE" | "PAUSED";
+  accountId?: string;
 }) {
-  return metaPost(`/${adAccount()}/ads`, {
+  return metaPost(`/${adAccount(opts.accountId)}/ads`, {
     name: opts.name,
     adset_id: opts.adset_id,
     creative: { creative_id: opts.creative_id },
