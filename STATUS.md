@@ -468,3 +468,9 @@ separately. `npx tsc --noEmit` + `npm run build` green after each.
   failed layout/fonts).
 - `app/app/loading.tsx`: dashboard-shaped skeleton (pulsing cards) so
   segment navigation feels instant instead of blank.
+
+### Gap 3 — Active-state app navigation ✅
+- New `components/AppNav.tsx` (client): highlights the current section via
+  `usePathname` (`aria-current="page"` + filled background), matching child
+  routes too. `app/app/layout.tsx` now renders it instead of an inert link
+  list, and the `<nav>` got an `aria-label`.
