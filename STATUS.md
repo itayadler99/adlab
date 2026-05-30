@@ -436,3 +436,24 @@ Scope: frontend pages, RTL Hebrew UX, brand kit, dashboard. Owns
 - Verification limited to typecheck + build: the container has no outbound
   network policy for the model hosts (see Phase 9 blocker), so live
   generation flows were not exercised end-to-end.
+
+## Phase UX-RTL+ — Production hardening (Terminal 4, branch `feat/ux-rtl`)
+
+After TASKS steps 1-5, scanned the scope for gaps and built a second wave
+of polish/perf/robustness improvements. Each is small + committed
+separately. `npx tsc --noEmit` + `npm run build` green after each.
+
+### Gap 1 — Font + metadata + globals perf/polish ✅
+- `app/layout.tsx`: Heebo now loaded via `next/font/google` (self-hosted,
+  `display: swap`, hebrew+latin subsets) instead of a render-blocking
+  external `<link>` to fonts.googleapis.com. Kills the extra network
+  round-trip + FOUC.
+- Hebrew `metadata` (title/description/openGraph, `locale: he_IL`) replacing
+  the old English copy; added a `viewport` export with `themeColor`
+  `#0a0a0a` + `colorScheme: dark` (Next 16 wants viewport/themeColor in the
+  `viewport` export, not `metadata`).
+- `app/globals.css`: removed the conflicting light-mode defaults (the app is
+  always dark), wired `--font-sans` to the `--font-heebo` variable with a
+  Hebrew system fallback stack, and added: violet `:focus-visible` ring,
+  accent `::selection`, slim dark scrollbars, and a `prefers-reduced-motion`
+  guard that disables the pulse/spin animations.
