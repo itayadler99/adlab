@@ -17,6 +17,10 @@
 // Stateless on the server — client holds ShowcaseState and ticks via
 // /api/showcase/advance. Same shape as the UGC pipeline.
 import Replicate from "replicate";
+import { spawn } from "node:child_process";
+import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import * as falLib from "./fal";
 import { checkVideoQuality } from "./quality-check";
 
@@ -481,6 +485,195 @@ export function shouldUseShowcase(opts: {
 function isSmallWearable(title?: string): boolean {
   if (!title) return false;
   return /ring|band|chain|necklace|pendant|earring|stud|hoop|bracelet|cuff|watch/i.test(title);
+}
+
+// ---- multi-clip sequence orchestrator -------------------------------------
+//
+// Drives N back-to-back showcase clips where the LAST frame of clip i becomes
+// the START frame of clip i+1, giving an unbroken motion thread across the
+// stitched ad. This is the Kling start/end-frame chaining technique from
+// RESEARCH_FINDINGS.md applied to the product showcase path.
+//
+// Workflow:
+//   1. startShowcaseSequence(inputs, totalSec) returns a state with one
+//      ShowcaseState[0] tracking the first clip (hero → animate).
+//   2. advanceShowcaseSequence() ticks the active sub-clip via advanceShowcase.
+//   3. When the active clip finishes, we extract its last frame (ffmpeg-static),
+//      upload to Blob, and spawn the next ShowcaseState seeded with
+//      chainFromUrl = that last frame.
+//   4. Loop until clips.length === planned. Caller then hands the produced
+//      video URLs to stitchVideos() to produce the final master.
+
+export interface ShowcaseSequenceInputs {
+  productTitle: string;
+  productImageUrl: string;
+  hook: string;
+  scene?: string;
+  /** Total ad length in seconds. Sequence splits into clipSec-long sub-clips. */
+  totalSec: number;
+  /** Length of each sub-clip. Default 10 (max for most i2v models). */
+  clipSec?: number;
+}
+
+export type ShowcaseSequenceStage = "running" | "done" | "failed";
+
+export interface ShowcaseSequenceState {
+  stage: ShowcaseSequenceStage;
+  inputs: ShowcaseSequenceInputs;
+  /** Per-clip sub-state. Last entry is the currently active clip. */
+  clips: ShowcaseState[];
+  /** Public URLs for finished clips, in order. Caller stitches these. */
+  clipUrls: string[];
+  /** How many sub-clips the sequence plans to produce. */
+  plannedClips: number;
+  error?: string;
+  startedAt: number;
+  updatedAt: number;
+}
+
+export async function startShowcaseSequence(
+  inputs: ShowcaseSequenceInputs
+): Promise<ShowcaseSequenceState> {
+  const clipSec = clampClipSec(inputs.clipSec);
+  const plannedClips = Math.max(1, Math.ceil(inputs.totalSec / clipSec));
+  const first = await startShowcase({
+    productTitle: inputs.productTitle,
+    productImageUrl: inputs.productImageUrl,
+    hook: inputs.hook,
+    scene: inputs.scene,
+    durationSec: clipSec,
+  });
+  return {
+    stage: "running",
+    inputs,
+    clips: [first],
+    clipUrls: [],
+    plannedClips,
+    startedAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+}
+
+export async function advanceShowcaseSequence(
+  state: ShowcaseSequenceState
+): Promise<ShowcaseSequenceState> {
+  if (state.stage === "done" || state.stage === "failed") return state;
+  const active = state.clips[state.clips.length - 1];
+  if (!active) {
+    state.stage = "failed";
+    state.error = "no active sub-clip in sequence state";
+    state.updatedAt = Date.now();
+    return state;
+  }
+
+  // Tick the active clip's own state machine.
+  const advanced = await advanceShowcase(active);
+  state.clips[state.clips.length - 1] = advanced;
+  state.updatedAt = Date.now();
+
+  if (advanced.stage === "failed") {
+    state.stage = "failed";
+    state.error = `clip ${state.clips.length}/${state.plannedClips} failed: ${advanced.error || "unknown"}`;
+    return state;
+  }
+  if (advanced.stage !== "done" || !advanced.artifacts.videoUrl) return state;
+
+  // Active clip finished. Stash its URL.
+  state.clipUrls.push(advanced.artifacts.videoUrl);
+
+  // Done with all planned clips?
+  if (state.clips.length >= state.plannedClips) {
+    state.stage = "done";
+    return state;
+  }
+
+  // Otherwise: extract last frame and kick off the next clip with it as
+  // chainFromUrl. Extraction failures degrade gracefully — we fall back to
+  // the hero composite path so the chain breaks but the next clip still runs.
+  let lastFrameUrl: string | undefined;
+  try {
+    lastFrameUrl = await extractLastFrameToBlob(advanced.artifacts.videoUrl);
+  } catch (e) {
+    console.warn("[showcase-seq] last-frame extraction failed, next clip will start fresh:", errMsg(e));
+  }
+
+  try {
+    const clipSec = clampClipSec(state.inputs.clipSec);
+    const next = await startShowcase({
+      productTitle: state.inputs.productTitle,
+      productImageUrl: state.inputs.productImageUrl,
+      hook: state.inputs.hook,
+      scene: state.inputs.scene,
+      durationSec: clipSec,
+      chainFromUrl: lastFrameUrl,
+    });
+    state.clips.push(next);
+    state.updatedAt = Date.now();
+    return state;
+  } catch (e) {
+    state.stage = "failed";
+    state.error = `failed to start clip ${state.clips.length + 1}: ${errMsg(e)}`;
+    return state;
+  }
+}
+
+function clampClipSec(v?: number): number {
+  const n = typeof v === "number" && v > 0 ? Math.round(v) : 10;
+  return Math.min(10, Math.max(5, n));
+}
+
+// ---- last-frame extraction (used by sequence chaining) --------------------
+
+async function extractLastFrameToBlob(videoUrl: string): Promise<string> {
+  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    throw new Error("BLOB_READ_WRITE_TOKEN not set");
+  }
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const ffmpegPath = require("ffmpeg-static") as string | null;
+  if (!ffmpegPath) throw new Error("ffmpeg-static binary not available");
+
+  const workDir = await mkdtemp(path.join(tmpdir(), "showcase-frame-"));
+  try {
+    const res = await fetch(videoUrl);
+    if (!res.ok) throw new Error(`fetch ${videoUrl}: HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    const inPath = path.join(workDir, "in.mp4");
+    const outPath = path.join(workDir, "last.jpg");
+    await writeFile(inPath, buf);
+
+    // Trick: -sseof -0.1 seeks to 0.1s before EOF, then -frames:v 1 grabs
+    // the next decoded frame — effectively the last frame.
+    await runFfmpegSpawn(ffmpegPath, [
+      "-y", "-sseof", "-0.1",
+      "-i", inPath,
+      "-update", "1", "-frames:v", "1", "-q:v", "2",
+      outPath,
+    ]);
+
+    const jpg = await readFile(outPath);
+    const { put } = await import("@vercel/blob");
+    const blob = await put(`showcase-chain/${Date.now()}.jpg`, jpg, {
+      access: "public",
+      contentType: "image/jpeg",
+      addRandomSuffix: true,
+    });
+    return blob.url;
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+function runFfmpegSpawn(bin: string, args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(bin, args, { stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    proc.stderr.on("data", (d) => { stderr += d.toString(); });
+    proc.on("error", reject);
+    proc.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`ffmpeg exited ${code}: ${stderr.slice(-1500)}`));
+    });
+  });
 }
 
 // ---- helpers --------------------------------------------------------------
