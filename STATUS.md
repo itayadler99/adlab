@@ -483,3 +483,18 @@ Gap list (meta+learn+klaviyo+stores+cron):
   routes use it; the local sanitize copies were removed.
 - `saveCampaign` now records `store_id` + `ad_account_id`.
 - `tsc --noEmit` clean.
+
+### Batch C — lib/learn.ts scan layer + learning-phase gate + audit log ✅
+- New `lib/learn.ts` (the owned file that didn't exist): `scanCampaigns()`
+  pulls all campaigns, reads lifetime+7d+30d each, and `classify()`s them:
+  winner / promising / kill / learning / watch.
+- **Learning-phase gate**: a high-ROAS campaign still in learning (< minDays OR
+  < minConversions, defaults 4d / 50 conv via LEARNING_MIN_DAYS /
+  LEARNING_MIN_CONVERSIONS) is "promising", NOT a "winner" — no premature
+  judgment. Kill rule still fires regardless (the explicit exception).
+- `check-winners` is now a thin route over `scanCampaigns` + `persistScan`;
+  alerts only on confirmed winners + kills, reports promising separately,
+  supports `?account_id=` to scan a specific store.
+- `persistScan()` writes a best-effort audit row to `roas_scan_log`
+  (new migration `supabase/migrations/v4_roas_scan_log.sql`; degrades when absent).
+- `tsc --noEmit` clean.
