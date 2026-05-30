@@ -16,7 +16,8 @@ import {
   type VoiceArchetype,
 } from "./ugc-prompts";
 import { checkCompositePreservesProduct } from "./vision-check";
-import { renderSoulFrame, predictVirality } from "./higgsfield";
+import { predictVirality } from "./higgsfield";
+import { renderSoulActorFrame, getPresetSoul } from "./souls";
 
 const COMPOSITE_VISION_THRESHOLD = 6; // confidence below this triggers a retry
 const COMPOSITE_MAX_ATTEMPTS = 2;     // first attempt + 1 retry
@@ -331,7 +332,7 @@ async function submitStage(
       // never blocks on Higgsfield availability.
       if (state.inputs.soulId) {
         try {
-          const soulFrameUrl = await renderSoulFrame({
+          const soulFrameUrl = await renderSoulActorFrame({
             soulId: state.inputs.soulId,
             prompt: buildActorPrompt(ctx),
             aspectRatio: "9:16",
@@ -353,8 +354,15 @@ async function submitStage(
         }
       }
       endpoint = FAL.actor;
+      // When a preset Soul was requested but couldn't be rendered live, keep
+      // the character recognizable by seeding the flux-pro prompt with the
+      // preset's description.
+      const presetSeed = state.inputs.soulId ? getPresetSoul(state.inputs.soulId)?.promptSeed : undefined;
+      const actorPrompt = presetSeed
+        ? `${buildActorPrompt(ctx)} The subject specifically is: ${presetSeed}.`
+        : buildActorPrompt(ctx);
       input = {
-        prompt: buildActorPrompt(ctx),
+        prompt: actorPrompt,
         aspect_ratio: "9:16",
         num_images: 1,
         safety_tolerance: "5",

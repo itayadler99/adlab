@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { listSouls } from "@/lib/higgsfield";
+import { listSouls } from "@/lib/souls";
 
 export const runtime = "nodejs";
 
