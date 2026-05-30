@@ -139,6 +139,10 @@ async function launchWhenReady(
     ad_id_a: resultA.adId,
     ad_id_b: resultB.adId,
     status: "running",
+    // Anchor the comparison window at launch. Adsets are PAUSED until the owner
+    // activates; the min-data gate in check-ab-winners keeps the test pending
+    // until real spend lands, so an early anchor is safe.
+    started_at: new Date().toISOString(),
   });
 }
 

@@ -17,12 +17,16 @@ async function getAdsetInsightRow(adsetId: string, since: string, until: string)
   return json.data?.[0] ?? null;
 }
 
+function authorized(req: NextRequest): boolean {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return true;
+  const header = req.headers.get("authorization");
+  const query = req.nextUrl.searchParams.get("secret");
+  return header === `Bearer ${secret}` || query === secret;
+}
+
 export async function GET(req: NextRequest) {
-  const authHeader = req.headers.get("authorization");
-  if (
-    process.env.CRON_SECRET &&
-    authHeader !== `Bearer ${process.env.CRON_SECRET}`
-  ) {
+  if (!authorized(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

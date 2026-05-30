@@ -538,3 +538,41 @@ remaining production hardening tracked for the next pass (see below).
   `node --experimental-strip-types --test lib/__tests__/*.test.ts`.
 - `tsconfig.json` excludes `lib/__tests__` (the `.ts` import extensions Node's
   test runner needs would otherwise trip tsc). tsc + build stay green.
+
+### Batch H — consistency polish ✅
+- `check-ab-winners` auth unified (accepts Vercel Bearer + `?secret`).
+- A/B test `started_at` anchored at launch so the comparison window is well
+  defined (min-data gate still prevents premature decisions).
+- tsc + 7/7 tests + build all green.
+
+---
+
+## SCOPE COMPLETE — production ready
+
+Terminal 3 (Meta integration + ROAS feedback loop + cron jobs) is
+production-ready to the limit of what is verifiable in this environment
+(tsc + unit tests + `next build` + review; live Meta calls are network-blocked).
+
+Goal coverage:
+1. ROAS feedback loop — reads lifetime+7d+30d; `topArchetypes` biases scripts;
+   **loop closed** (launch seeds `variant_perf`, learn cron backfills ROAS).
+2. `/api/cron/check-winners` — real scan, ROAS>3 winner alerts, kill rule
+   (0 purchases + spend>₪200), learning-phase gate, audit log, scheduled+authed.
+3. A/B launcher — 1 script → 2 models → 2 PAUSED adsets, 5-day compare with a
+   min-data gate so flukes can't decide.
+4. Headline variants — 3 Itay-style Hebrew variants, wired into launch + a
+   dedicated endpoint, centrally sanitized (`lib/copy.ts`).
+5. Multi-store — 5 stores; launches target the selected store's ad account
+   (with an unconfigured-store guard), surfaced via `/api/stores`.
+
+Meta-rule compliance: `LOWEST_COST_WITHOUT_CAP` everywhere (never Bid Cap),
+all campaigns created PAUSED, always lifetime+7d+30d, kill rule enforced.
+
+Hardening: retry/backoff on all Meta calls, pagination, video-ready polling,
+input validation, per-account targeting, unit tests on the money-critical
+helpers.
+
+Only outstanding items are EXTERNAL (documented in BLOCKERS.md), not code gaps:
+- Live Meta smoke test (network allowlist blocks graph.facebook.com).
+- Full Klaviyo campaign send flow (needs a live Klaviyo account to verify shapes).
+- Env vars + Supabase migrations to apply on deploy (BLOCKERS.md).
