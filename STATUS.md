@@ -522,3 +522,19 @@ Gap list (meta+learn+klaviyo+stores+cron):
 
 ### Phase M2 status: 10/10 gaps addressed (Batches A-E). Not yet SCOPE COMPLETE —
 remaining production hardening tracked for the next pass (see below).
+
+### Batch F — close the ROAS feedback loop + launch validation ✅
+- `app/api/launch/route.ts`: seeds a `variant_perf` row at launch (meta_ad_id +
+  hook/actor archetype + vertical) so `runLearnCron` can backfill ROAS and
+  `topArchetypes()` can bias future scripts. Previously NOTHING populated
+  variant_perf — the loop was open in production. Best-effort.
+- Guards against launching into the GLOBAL account when a selected store is
+  unconfigured; validates name/video_url/daily_budget; sanitizes explicit
+  Hebrew messages.
+
+### Batch G — unit tests on money-critical helpers ✅
+- `lib/__tests__/meta.test.ts` + `copy.test.ts`: 7 tests over purchase counting
+  (kill rule), ROAS math, and the Hebrew copy rules. Run with
+  `node --experimental-strip-types --test lib/__tests__/*.test.ts`.
+- `tsconfig.json` excludes `lib/__tests__` (the `.ts` import extensions Node's
+  test runner needs would otherwise trip tsc). tsc + build stay green.
