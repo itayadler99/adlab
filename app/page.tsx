@@ -4,7 +4,7 @@ export default function LandingPage() {
   return (
     <main className="min-h-screen bg-black text-white flex flex-col">
       {/* Nav */}
-      <nav className="flex items-center justify-between px-8 py-5 border-b border-white/10">
+      <nav className="flex items-center justify-between px-6 sm:px-8 py-5 border-b border-white/10">
         <span className="text-xl font-bold tracking-tight">
           Ad<span className="text-violet-400">Lab</span>
         </span>
@@ -63,6 +63,41 @@ export default function LandingPage() {
         </p>
       </section>
 
+      {/* Trust strip */}
+      <section className="border-t border-white/10 px-6 py-8">
+        <div className="max-w-4xl mx-auto grid grid-cols-1 sm:grid-cols-3 gap-6 text-center">
+          {trust.map((t) => (
+            <div key={t.label} className="flex flex-col gap-1">
+              <span className="text-2xl font-bold text-violet-400">{t.value}</span>
+              <span className="text-sm text-white/50">{t.label}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* How it works */}
+      <section className="py-24 px-6 border-t border-white/10">
+        <div className="max-w-4xl mx-auto">
+          <h2 className="text-3xl sm:text-4xl font-bold text-center mb-16">
+            שלושה צעדים לפרסומת שמוכרת
+          </h2>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+            {steps.map((s, i) => (
+              <div
+                key={s.title}
+                className="bg-white/5 border border-white/10 rounded-2xl p-6 flex flex-col gap-3"
+              >
+                <span className="w-8 h-8 rounded-full bg-violet-600/20 border border-violet-500/40 text-violet-300 text-sm font-bold flex items-center justify-center">
+                  {i + 1}
+                </span>
+                <h3 className="font-semibold text-lg">{s.title}</h3>
+                <p className="text-white/50 text-sm leading-relaxed">{s.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
       {/* Features */}
       <section id="features" className="py-24 px-6 border-t border-white/10">
         <div className="max-w-5xl mx-auto">
@@ -112,6 +147,27 @@ export default function LandingPage() {
     </main>
   );
 }
+
+const trust = [
+  { value: "דקות", label: "מרעיון לפרסומת מוכנה" },
+  { value: "ישירות", label: "השקה לפייסבוק ולאינסטגרם" },
+  { value: "ללא צוות", label: "בלי הפקה וצילומים" },
+];
+
+const steps = [
+  {
+    title: "חיבור החנות",
+    desc: "מחברים את חנות השופיפיי ואת חשבון המטא פעם אחת, והמערכת מושכת מוצרים ויעדים אוטומטית.",
+  },
+  {
+    title: "הפקת הפרסומת",
+    desc: "בוחרים מוצר, והבינה כותבת תסריט, מפיקה סרטון ומלבישה עליו את ערכת המותג שלכם.",
+  },
+  {
+    title: "השקה למטא",
+    desc: "מאשרים את הטיוטה ומשיקים קמפיין עם קהל ותקציב מוכנים, הכל בלחיצה אחת.",
+  },
+];
 
 const features = [
   {

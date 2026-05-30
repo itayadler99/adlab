@@ -23,6 +23,12 @@ body {
   font-family: var(--font-sans);
 }
 
+/* Smooth in-page anchor scrolling (landing "איך זה עובד"). Disabled below for
+   reduced-motion users. */
+html {
+  scroll-behavior: smooth;
+}
+
 /* RTL ergonomics — text starts from the right by default. */
 html[dir="rtl"] {
   text-align: start;
@@ -75,6 +81,9 @@ html[dir="rtl"] .ltr-only {
 /* Respect reduced-motion: kill the pulse/spin/transition animations for users
    who opt out. */
 @media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
   *,
   *::before,
   *::after {

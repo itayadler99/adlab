@@ -499,3 +499,12 @@ separately. `npx tsc --noEmit` + `npm run build` green after each.
   campaigns table (objective + spend cells).
 - Costs monthly-budget input now has an associated `<label htmlFor>` +
   `aria-label` (was an unlinked span next to a bare input).
+
+### Gap 7 — Landing conversion polish ✅
+- Added a minimalist trust strip (דקות / ישירות / ללא צוות) under the hero
+  and a "שלושה צעדים" how-it-works section (חיבור החנות → הפקת הפרסומת →
+  השקה למטא) so the page sells the flow, not just features. No fake
+  testimonials, no specific dates, no "GRA".
+- Smooth in-page anchor scrolling for "איך זה עובד" (globals `scroll-behavior`,
+  disabled under reduced-motion). Nav padding tightened on mobile
+  (`px-6 sm:px-8`).
