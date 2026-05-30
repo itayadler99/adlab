@@ -39,10 +39,33 @@ import path from "node:path";
 
 export type PostProcessLevel = "off" | "fast" | "speel" | "speel-4k";
 
+/** Per-filter intensity controls. Defaults match the research recipe. */
+export interface RealismIntensity {
+  /** ffmpeg noise alls 0-30. Default 10. */
+  grain?: number;
+  /** Halation screen-blend opacity 0-0.6. Default 0.18. */
+  halation?: number;
+  /** Final saturation multiplier 0.8-1.3. Default 1.05. */
+  saturation?: number;
+  /** Unsharp amount 0-1.5. Default 0.7. */
+  sharpen?: number;
+}
+
 export interface PostProcessOpts {
   level?: PostProcessLevel;
   /** When false, skip the metadata strip step (e.g. unit tests that diff bytes). */
   stripMetadata?: boolean;
+  /** Override per-filter intensities (each falls back to defaults). */
+  intensity?: RealismIntensity;
+  /** Override the target framerate of the RIFE interpolation. */
+  targetFps?: number;
+  /**
+   * Optional URL or absolute path to a `.cube` LUT file. If provided we use
+   * ffmpeg `lut3d` instead of the curves+eq approximation. Useful for the
+   * "iPhone 15 Pro" LUT from RESEARCH_FINDINGS.md once you drop one into
+   * public/luts/.
+   */
+  lutPath?: string;
 }
 
 export interface PostProcessResult {
@@ -50,44 +73,88 @@ export interface PostProcessResult {
   trace: {
     level: PostProcessLevel;
     rifeApplied: boolean;
+    rifeModel?: string;
     ffmpegApplied: boolean;
     upscaleApplied: boolean;
     metadataStripped: boolean;
+    lutApplied: boolean;
+    /** Per-filter values actually applied — useful when intensity was overridden. */
+    intensity: Required<RealismIntensity>;
     error?: string;
   };
 }
 
-const RIFE_MODEL = "pollinations/rife";
+// RIFE chain — try primary, fall through on access errors.
+const RIFE_MODELS = [
+  "pollinations/rife",
+  "zsxkib/rife", // community-maintained alternative
+] as const;
 const UPSCALE_MODEL = "lucataco/real-esrgan-video";
+
+const DEFAULT_INTENSITY: Required<RealismIntensity> = {
+  grain: 10,
+  halation: 0.18,
+  saturation: 1.05,
+  sharpen: 0.7,
+};
+
+function resolveIntensity(override?: RealismIntensity): Required<RealismIntensity> {
+  return {
+    grain: clamp(override?.grain ?? DEFAULT_INTENSITY.grain, 0, 30),
+    halation: clamp(override?.halation ?? DEFAULT_INTENSITY.halation, 0, 0.6),
+    saturation: clamp(override?.saturation ?? DEFAULT_INTENSITY.saturation, 0.8, 1.3),
+    sharpen: clamp(override?.sharpen ?? DEFAULT_INTENSITY.sharpen, 0, 1.5),
+  };
+}
+
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, n));
+}
 
 export async function applyRealism(
   videoUrl: string,
   opts: PostProcessOpts = {}
 ): Promise<PostProcessResult> {
   const level: PostProcessLevel = opts.level ?? "fast";
-  const trace = {
+  const intensity = resolveIntensity(opts.intensity);
+  const trace: PostProcessResult["trace"] = {
     level,
     rifeApplied: false,
     ffmpegApplied: false,
     upscaleApplied: false,
     metadataStripped: false,
-  } as PostProcessResult["trace"];
+    lutApplied: false,
+    intensity,
+  };
 
   if (level === "off") return { url: videoUrl, trace };
 
   let workingUrl = videoUrl;
 
-  // Step 2 (speel + speel-4k): Replicate RIFE for 2x frame interpolation.
+  // Step 2 (speel + speel-4k): Replicate RIFE for frame interpolation. Walks
+  // the RIFE_MODELS chain so a gated primary doesn't kill the whole pass.
   if ((level === "speel" || level === "speel-4k") && process.env.REPLICATE_API_TOKEN) {
-    try {
-      const interped = await runRife(workingUrl);
-      if (interped) {
-        workingUrl = interped;
-        trace.rifeApplied = true;
+    const targetFps = opts.targetFps ?? 60;
+    let rifeErr: unknown;
+    for (const model of RIFE_MODELS) {
+      try {
+        const interped = await runRife(workingUrl, model, targetFps);
+        if (interped) {
+          workingUrl = interped;
+          trace.rifeApplied = true;
+          trace.rifeModel = model;
+          rifeErr = undefined;
+          break;
+        }
+      } catch (e) {
+        rifeErr = e;
+        if (!isModelAccessError(e)) break; // non-auth failure is real — stop walking
+        console.warn(`[postprocess] RIFE ${model} not accessible, trying next:`, errMsg(e));
       }
-    } catch (e) {
-      console.warn("[postprocess] RIFE failed, continuing without interp:", errMsg(e));
-      trace.error = `rife: ${errMsg(e)}`;
+    }
+    if (rifeErr) {
+      console.warn("[postprocess] RIFE failed across chain, continuing without interp:", errMsg(rifeErr));
+      trace.error = `rife: ${errMsg(rifeErr)}`;
     }
   }
 
@@ -113,9 +180,15 @@ export async function applyRealism(
   }
   try {
     const stripMetadata = opts.stripMetadata !== false;
-    const enhanced = await runFfmpegRealism(workingUrl, { stripMetadata });
+    const lutPath = await resolveLutPath(opts.lutPath);
+    const enhanced = await runFfmpegRealism(workingUrl, {
+      stripMetadata,
+      intensity,
+      lutPath,
+    });
     trace.ffmpegApplied = true;
     trace.metadataStripped = stripMetadata;
+    trace.lutApplied = Boolean(lutPath);
     return { url: enhanced, trace };
   } catch (e) {
     console.warn("[postprocess] ffmpeg pass failed, returning prior url:", errMsg(e));
@@ -124,12 +197,41 @@ export async function applyRealism(
   }
 }
 
+/**
+ * Apply realism to N clips in parallel.
+ *
+ * Useful when the showcase sequence orchestrator produces multiple sub-clips
+ * we want enhanced before stitching. We cap concurrency to avoid hammering
+ * the same Vercel function's CPU with N simultaneous ffmpeg processes.
+ */
+export async function applyRealismToMany(
+  videoUrls: string[],
+  opts: PostProcessOpts & { concurrency?: number } = {}
+): Promise<PostProcessResult[]> {
+  const concurrency = Math.max(1, Math.min(4, opts.concurrency ?? 2));
+  const results: PostProcessResult[] = new Array(videoUrls.length);
+  let nextIdx = 0;
+  async function worker() {
+    while (true) {
+      const i = nextIdx++;
+      if (i >= videoUrls.length) return;
+      results[i] = await applyRealism(videoUrls[i], opts);
+    }
+  }
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+  return results;
+}
+
 // ---- Replicate models -----------------------------------------------------
 
-async function runRife(videoUrl: string): Promise<string | null> {
+async function runRife(
+  videoUrl: string,
+  model: string,
+  fps: number
+): Promise<string | null> {
   const replicate = new Replicate({ auth: process.env.REPLICATE_API_TOKEN });
-  const output = await replicate.run(RIFE_MODEL as `${string}/${string}`, {
-    input: { video: videoUrl, fps: 60 }, // research: 24→60 is the sweet spot
+  const output = await replicate.run(model as `${string}/${string}`, {
+    input: { video: videoUrl, fps }, // research: 24→60 is the sweet spot
   });
   return pickReplicateUrl(output);
 }
@@ -172,26 +274,43 @@ function pickReplicateUrl(output: unknown): string | null {
 //   gblur=sigma=8                                soft bloom
 //   eq=brightness=0.04                           lift it a touch
 // [base]
-//   noise=alls=10:allf=t                         35mm grain
-//   curves=...teal/orange iPhone-ish             color grade
-//   eq=saturation=1.05                           perceived "filmy" look
+//   noise=alls=<grain>:allf=t                    35mm grain
+//   curves OR lut3d                              teal/orange iPhone color grade
+//   eq=saturation=<saturation>                   perceived "filmy" look
 // [graded][glow]
-//   blend=all_mode=screen:all_opacity=0.18       halation/bloom mix
-//   unsharp=5:5:0.7                              sharpen pop
+//   blend=screen:opacity=<halation>              halation/bloom mix
+//   unsharp=5:5:<sharpen>                        sharpen pop
 //
 // We keep the chain inside one -filter_complex so ffmpeg only re-encodes once.
-const FILTER_COMPLEX = [
-  "[0:v]split=2[base][glow]",
-  "[glow]gblur=sigma=8,eq=brightness=0.04[bloom]",
-  "[base]noise=alls=10:allf=t," +
-    "curves=r='0/0 0.5/0.55 1/1':b='0/0.05 0.5/0.45 1/0.95'," +
-    "eq=saturation=1.05[graded]",
-  "[graded][bloom]blend=all_mode=screen:all_opacity=0.18,unsharp=5:5:0.7[v]",
-].join(";");
+function buildFilterComplex(opts: {
+  intensity: Required<RealismIntensity>;
+  lutPath?: string;
+}): string {
+  const { grain, halation, saturation, sharpen } = opts.intensity;
+  const colorGrade = opts.lutPath
+    ? `lut3d=file=${escapeFilterArg(opts.lutPath)}`
+    : "curves=r='0/0 0.5/0.55 1/1':b='0/0.05 0.5/0.45 1/0.95'";
+  return [
+    "[0:v]split=2[base][glow]",
+    "[glow]gblur=sigma=8,eq=brightness=0.04[bloom]",
+    `[base]noise=alls=${grain}:allf=t,${colorGrade},eq=saturation=${saturation}[graded]`,
+    `[graded][bloom]blend=all_mode=screen:all_opacity=${halation},unsharp=5:5:${sharpen}[v]`,
+  ].join(";");
+}
+
+// ffmpeg filter_complex args interpret special chars (':', ',', '\') as
+// separators. Wrap paths to keep colons/commas inside filenames intact.
+function escapeFilterArg(s: string): string {
+  return `'${s.replace(/'/g, "\\'").replace(/\\/g, "\\\\")}'`;
+}
 
 async function runFfmpegRealism(
   videoUrl: string,
-  opts: { stripMetadata: boolean }
+  opts: {
+    stripMetadata: boolean;
+    intensity: Required<RealismIntensity>;
+    lutPath?: string;
+  }
 ): Promise<string> {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const ffmpegPath = require("ffmpeg-static") as string | null;
@@ -206,9 +325,13 @@ async function runFfmpegRealism(
     const outPath = path.join(workDir, "out.mp4");
     await writeFile(inPath, buf);
 
+    const filterComplex = buildFilterComplex({
+      intensity: opts.intensity,
+      lutPath: opts.lutPath,
+    });
     const args = [
       "-y", "-i", inPath,
-      "-filter_complex", FILTER_COMPLEX,
+      "-filter_complex", filterComplex,
       "-map", "[v]",
       "-map", "0:a?", // pass through audio if present
       "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
@@ -255,4 +378,50 @@ function runFfmpeg(bin: string, args: string[]): Promise<void> {
 
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+function isModelAccessError(e: unknown): boolean {
+  const msg = errMsg(e).toLowerCase();
+  return /unauthorized|cannot access|forbidden|not found|404|401|403|access denied/.test(msg);
+}
+
+// Resolve the LUT path. Accepts:
+//   - undefined  → no LUT (use curves)
+//   - absolute path → use as-is
+//   - relative path → resolved against the deployed app root (process.cwd())
+//   - http(s) URL → download to /tmp first, return the local path
+// Returns undefined when no LUT can be located.
+async function resolveLutPath(lutPath?: string): Promise<string | undefined> {
+  if (!lutPath) {
+    // Auto-pick public/luts/iphone.cube if it's shipped with the deployment.
+    const auto = path.join(process.cwd(), "public", "luts", "iphone.cube");
+    try {
+      await stat(auto);
+      return auto;
+    } catch {
+      return undefined;
+    }
+  }
+  if (/^https?:\/\//i.test(lutPath)) {
+    try {
+      const res = await fetch(lutPath);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const dir = await mkdtemp(path.join(tmpdir(), "lut-"));
+      const local = path.join(dir, "lut.cube");
+      await writeFile(local, Buffer.from(await res.arrayBuffer()));
+      return local;
+    } catch (e) {
+      console.warn("[postprocess] LUT download failed, falling back to curves:", errMsg(e));
+      return undefined;
+    }
+  }
+  // Assume filesystem path.
+  const abs = path.isAbsolute(lutPath) ? lutPath : path.join(process.cwd(), lutPath);
+  try {
+    await stat(abs);
+    return abs;
+  } catch {
+    console.warn(`[postprocess] LUT not found at ${abs}, falling back to curves`);
+    return undefined;
+  }
 }
