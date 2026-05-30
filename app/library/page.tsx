@@ -1,4 +1,7 @@
 import { listAll } from "@/lib/db";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = { title: "ספרייה" };
 
 export const dynamic = "force-dynamic";
 

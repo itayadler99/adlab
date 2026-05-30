@@ -1,4 +1,7 @@
 import Link from "next/link";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = { title: "דשבורד" };
 
 const navItems = [
   { href: "/autopilot", label: "טייס אוטומטי", icon: "🤖", desc: "מהדבקת קישור מתחרה ועד קמפיין חי במטא בלחיצה אחת" },

@@ -483,3 +483,12 @@ separately. `npx tsc --noEmit` + `npm run build` green after each.
 - Consumes the `?inspiration=` query param the spy tool already links to
   ("שימוש כהשראה") and pre-fills the prompt, with a notice banner. Wrapped
   in `<Suspense>` per Next 16's `useSearchParams` requirement.
+
+### Gap 5 — Production SEO / PWA metadata ✅
+- `app/robots.ts`: allow the landing, disallow `/app/`, `/api/`, `/autopilot`
+  (the product sits behind basic auth, only marketing should be crawlable).
+- `app/manifest.ts`: Hebrew RTL web manifest (`lang: he`, `dir: rtl`,
+  `start_url: /app`, dark theme/background) so installs + tab theming match.
+- Root `metadata` gained a `metadataBase` + a `title.template` ("%s · AdLab");
+  dashboard ("דשבורד") and library ("ספרייה") server pages now set their own
+  titles for clean Hebrew browser tabs.
