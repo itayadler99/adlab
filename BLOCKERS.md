@@ -223,3 +223,36 @@ The A/B launcher now creates everything PAUSED (ironclad rule). The owner must
 activate both adsets in Ads Manager for the 5-day ROAS comparison to gather
 data; check-ab-winners leaves a test pending until real spend lands on both
 adsets, so activation timing no longer causes a premature tie.
+
+---
+
+## Phase M2 (Terminal 3) — follow-ups & deferred items
+
+### Klaviyo full campaign send flow (deferred — needs live account)
+`lib/klaviyo.ts` now does templates + list management + RTL Hebrew email, but
+the multi-step "create campaign → attach campaign-message → assign template →
+create send-job" flow was NOT shipped because the exact 2024-10-15 request
+shapes can't be validated without a live Klaviyo account (mirrors the project's
+"don't ship unverifiable API calls" stance). To finish later, implement against
+a sandbox key and verify each step returns 2xx:
+```
+POST /api/campaigns/                      # campaign + audiences.included:[listId]
+POST /api/campaign-message-assign-template/
+POST /api/campaign-send-jobs/             # trigger the send
+```
+
+### New env vars (Phase M2)
+```sh
+# Learning-phase gate (check-winners / lib/learn.ts)
+#   LEARNING_MIN_DAYS        = 4    (no winner verdict before this many days)
+#   LEARNING_MIN_CONVERSIONS = 50   (or before this many lifetime purchases)
+# A/B decision floor (check-ab-winners)
+#   AB_MIN_SPEND        = 50
+#   AB_MIN_CONVERSIONS  = 5
+# Per-store ad accounts already documented in Phase M; the launch + abtest
+# routes now accept store_id and target that store's account automatically.
+```
+
+### Audit table (Phase M2)
+Run `supabase/migrations/v4_roas_scan_log.sql` to enable scan audit logging.
+Degrades gracefully (persistScan no-ops) when absent.

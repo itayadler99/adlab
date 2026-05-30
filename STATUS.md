@@ -511,3 +511,14 @@ Gap list (meta+learn+klaviyo+stores+cron):
   see BLOCKERS.md (needs a live Klaviyo account to validate the multi-step
   campaign-message/template-assign/send-job shapes).
 - `tsc --noEmit` clean.
+
+### Batch E — A/B winner min-data gate ✅
+- `app/api/cron/check-ab-winners/route.ts`: no longer decides on any spend.
+  Requires combined spend ≥ AB_MIN_SPEND (default 50) AND at least one arm
+  with ≥ AB_MIN_CONVERSIONS purchases (default 5) before declaring a winner;
+  otherwise the test stays pending with a reason. Now uses the shared
+  roasOf/spendOf/purchaseCount helpers (broader purchase action-type coverage).
+- `npm run build` passes; all 10 meta-loop routes registered.
+
+### Phase M2 status: 10/10 gaps addressed (Batches A-E). Not yet SCOPE COMPLETE —
+remaining production hardening tracked for the next pass (see below).
