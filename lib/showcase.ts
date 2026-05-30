@@ -490,14 +490,46 @@ function buildFalAnimateInput(
   }
 }
 
-// ---- prompt builders ------------------------------------------------------
+// ---- prompt phrase library (from RESEARCH_FINDINGS.md) --------------------
 
-// Research findings: phrases that BREAK realism — avoid.
-//   "cinematic 8k masterpiece", "professional studio lighting",
-//   "perfectly framed", "high quality".
-// Phrases that WORK — prefer.
-//   "soft window light", "subtle camera shake", "natural skin",
-//   "imperfect framing", "raw, documentary feel".
+/**
+ * Phrases that empirically land realism (per RESEARCH_FINDINGS.md).
+ * Useful for letting the UI surface "+ add phrase" suggestions or for the
+ * autopilot script writer to pick from.
+ */
+export const REALISM_PHRASES_WORK: readonly string[] = Object.freeze([
+  "shot on iPhone 15, vertical 9:16",
+  "soft window light, late afternoon",
+  "handheld, subtle camera shake",
+  "natural skin with visible pores",
+  "slightly overexposed highlights",
+  "imperfect framing, subject off-center",
+  "candid, unscripted, no eye contact with lens",
+  "background slightly out of focus, depth of field",
+  "raw, real, not polished, documentary feel",
+]);
+
+/**
+ * Phrases that break realism. The prompt builders strip these; documenting
+ * them here lets a hand-written script avoid them too.
+ */
+export const REALISM_PHRASES_BREAK: readonly string[] = Object.freeze([
+  "cinematic 8k masterpiece",
+  "professional studio lighting",
+  "perfectly framed",
+  "high quality",
+]);
+
+/** Strip the BREAK phrases from a candidate prompt (case-insensitive). */
+export function scrubBreakPhrases(prompt: string): string {
+  let out = prompt;
+  for (const phrase of REALISM_PHRASES_BREAK) {
+    out = out.replace(new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), "");
+  }
+  return out.replace(/\s{2,}/g, " ").trim();
+}
+
+// ---- prompt builders ------------------------------------------------------
 
 export function buildHeroPrompt(inputs: ShowcaseInputs): string {
   const scene = inputs.scene || pickDefaultScene(inputs.productTitle);

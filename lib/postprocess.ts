@@ -73,6 +73,13 @@ export interface PostProcessOpts {
    * public/luts/.
    */
   lutPath?: string;
+  /**
+   * When true, run the source audio through `loudnorm=I=-18:LRA=11:TP=-2`
+   * before re-encoding. Brings the final ad to -18 LUFS — the
+   * Meta/TikTok-friendly target the research recipe calls out.
+   * Default: true when the source has audio. Set false to bit-exact copy.
+   */
+  normalizeAudio?: boolean;
 }
 
 export interface PostProcessResult {
@@ -85,6 +92,7 @@ export interface PostProcessResult {
     upscaleApplied: boolean;
     metadataStripped: boolean;
     lutApplied: boolean;
+    audioNormalized: boolean;
     /** Per-filter values actually applied — useful when intensity was overridden. */
     intensity: Required<RealismIntensity>;
     error?: string;
@@ -133,6 +141,7 @@ export async function applyRealism(
     upscaleApplied: false,
     metadataStripped: false,
     lutApplied: false,
+    audioNormalized: false,
     intensity,
   };
 
@@ -189,15 +198,18 @@ export async function applyRealism(
   }
   try {
     const stripMetadata = opts.stripMetadata !== false;
+    const normalizeAudio = opts.normalizeAudio !== false;
     const lutPath = await resolveLutPath(opts.lutPath);
     const enhanced = await runFfmpegRealism(workingUrl, {
       stripMetadata,
       intensity,
       lutPath,
+      normalizeAudio,
     });
     trace.ffmpegApplied = true;
     trace.metadataStripped = stripMetadata;
     trace.lutApplied = Boolean(lutPath);
+    trace.audioNormalized = normalizeAudio;
     return { url: enhanced, trace };
   } catch (e) {
     console.warn("[postprocess] ffmpeg pass failed, returning prior url:", errMsg(e));
@@ -326,6 +338,7 @@ async function runFfmpegRealism(
     stripMetadata: boolean;
     intensity: Required<RealismIntensity>;
     lutPath?: string;
+    normalizeAudio: boolean;
   }
 ): Promise<string> {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -345,14 +358,24 @@ async function runFfmpegRealism(
       intensity: opts.intensity,
       lutPath: opts.lutPath,
     });
+    const audioArgs = opts.normalizeAudio
+      ? [
+          "-map", "0:a?",
+          // loudnorm to -18 LUFS — the Meta/TikTok target per research.
+          // Single-pass is sufficient for ad-length clips; two-pass would
+          // require probing first, which adds 2x latency.
+          "-af", "loudnorm=I=-18:LRA=11:TP=-2",
+          "-c:a", "aac", "-b:a", "128k", "-ar", "48000",
+        ]
+      : ["-map", "0:a?", "-c:a", "aac", "-b:a", "128k"];
+
     const args = [
       "-y", "-i", inPath,
       "-filter_complex", filterComplex,
       "-map", "[v]",
-      "-map", "0:a?", // pass through audio if present
+      ...audioArgs,
       "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
       "-pix_fmt", "yuv420p",
-      "-c:a", "aac", "-b:a", "128k",
       // Metadata strip — proxy for exiftool -all=. Removes container metadata,
       // chapters, and (importantly) most C2PA / Content Credentials beacons.
       ...(opts.stripMetadata
