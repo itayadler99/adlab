@@ -40,6 +40,19 @@ export const FAL = {
 const REPLICATE_LIPSYNC_PRIMARY = "sync/lipsync-2" as const;
 const REPLICATE_LIPSYNC_LASTRESORT = "cjwbw/wav2lip" as const;
 
+// sync/lipsync-2 is audio-driven (it tracks the waveform, not a phoneme
+// transcript), so Hebrew accuracy is won two ways: (1) cleaner, slower Hebrew
+// TTS upstream — see buildVoiceSettings in ugc-prompts; (2) a lower temperature
+// here so the model tracks the audio tightly instead of inventing expressive
+// mouth shapes that read as wrong on non-English phonemes. `cut_off` keeps the
+// output the length of the (shorter) source rather than looping.
+// `LIPSYNC2_TEMPERATURE` env lets the owner retune or zero it out if a future
+// model build rejects the field (the chain falls through to FAL on a 422).
+const LIPSYNC2_TEMPERATURE = (() => {
+  const raw = Number(process.env.LIPSYNC2_TEMPERATURE);
+  return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.5;
+})();
+
 // Phase 9: Replicate Veo 3 Fast (i2v) is the primary animate path now because
 // the production FAL_KEY is revoked. FAL Veo stays as tier-2 fallback in case
 // the key is rotated later.
@@ -485,7 +498,7 @@ async function submitLipsyncTier(state: UgcState, tier: 1 | 2 | 3): Promise<void
         input: Record<string, unknown>;
       }) => Promise<{ id: string }>)({
         model: REPLICATE_LIPSYNC_PRIMARY,
-        input: { video, audio, sync_mode: "cut_off" },
+        input: { video, audio, sync_mode: "cut_off", temperature: LIPSYNC2_TEMPERATURE },
       });
       state.pending = { endpoint: REPLICATE_LIPSYNC_PRIMARY, jobId: prediction.id, provider: "replicate" };
       state.lipsyncTier = 1;

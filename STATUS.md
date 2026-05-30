@@ -396,3 +396,20 @@ What changed
 
 What was tested
 - `npx tsc --noEmit` clean.
+
+## Phase B — audio/captions: sync/lipsync-2 Hebrew phoneme accuracy ✅
+
+What changed
+- `lib/ugc.ts`: tier-1 lipsync (`sync/lipsync-2`) now passes a `temperature`
+  (default 0.5, env `LIPSYNC2_TEMPERATURE`) so the model tracks the audio
+  waveform tightly instead of inventing expressive mouth shapes that read as
+  wrong on Hebrew phonemes. Combined with the slower/cleaner Hebrew TTS from
+  Phase A, this is the realistic lever for Hebrew lipsync (the model is
+  audio-driven, not transcript-driven). `sync_mode: "cut_off"` unchanged.
+- Fail-through preserved: if a future model build rejects `temperature` the
+  tier advances to FAL `sync-lipsync/v2` then Replicate `cjwbw/wav2lip`.
+
+What was tested
+- `npx tsc --noEmit` clean.
+- Live verification of the `temperature` field pending network access — see
+  BLOCKERS.md.

@@ -66,6 +66,24 @@ will auto-fall through to FAL `sync-lipsync/v2` and then Replicate
 `cjwbw/wav2lip`, so no hard breakage — just upgrade the Replicate plan
 if you want the v2 quality.
 
+### Verify the `temperature` input on sync/lipsync-2 (Phase B, Terminal 2)
+
+Phase B adds `temperature` (default 0.5) to the tier-1 `sync/lipsync-2`
+submit for tighter Hebrew phoneme tracking. If the live model build does
+not expose that field Replicate returns a 422 and the pipeline falls
+through to FAL `sync-lipsync/v2` (no hard breakage, but the Hebrew-accuracy
+gain is lost). Verify once network access is available:
+
+```sh
+curl -s -X POST https://api.replicate.com/v1/models/sync/lipsync-2/predictions \
+  -H "Authorization: Bearer $REPLICATE_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"input":{"video":"<small mp4>","audio":"<small mp3>","sync_mode":"cut_off","temperature":0.5}}' | jq
+```
+
+If 422 on `temperature`, set `LIPSYNC2_TEMPERATURE` accordingly or remove
+the field from `lib/ugc.ts`.
+
 ## ElevenLabs v3 access (Phase 7)
 
 UGC TTS now defaults to `fal-ai/elevenlabs/tts/eleven-v3`. If the FAL
