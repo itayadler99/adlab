@@ -423,27 +423,36 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
   });
 
   // Probe the winner's real video duration via FAL ffmpeg so we route + clamp
-  // off ground truth, not just the LLM's storyboard estimate.
-  const winnerVideoUrl =
-    winner.snapshot?.videos?.[0]?.videoHdUrl ||
-    winner.snapshot?.videos?.[0]?.videoSdUrl ||
-    "";
-  if (winnerVideoUrl && storyboard.approxDurationSec === 0) {
+  // off ground truth, not just the LLM's storyboard estimate. Probe BOTH HD
+  // and SD URLs — Meta's CDN sometimes blocks one. If both probes fail and
+  // the ad has a video at all, fall back to a 20s default (typical Meta
+  // creative length) so we don't collapse to a 5s clip.
+  const winnerHd = winner.snapshot?.videos?.[0]?.videoHdUrl || "";
+  const winnerSd = winner.snapshot?.videos?.[0]?.videoSdUrl || "";
+  const winnerVideoUrl = winnerHd || winnerSd;
+  let probedDuration = 0;
+  if (winnerHd) {
     try {
-      const probed = await getVideoDurationSec(winnerVideoUrl);
-      if (probed && probed > 0) storyboard.approxDurationSec = Math.round(probed);
-    } catch {
-      // ignore — fall back to LLM estimate (likely 0)
-    }
-  } else if (winnerVideoUrl) {
-    // Overwrite LLM estimate with truth when available.
-    try {
-      const probed = await getVideoDurationSec(winnerVideoUrl);
-      if (probed && probed > 0) storyboard.approxDurationSec = Math.round(probed);
-    } catch {
-      // keep LLM estimate
-    }
+      const p = await getVideoDurationSec(winnerHd);
+      if (p && p > 0) probedDuration = Math.round(p);
+    } catch {}
   }
+  if (!probedDuration && winnerSd) {
+    try {
+      const p = await getVideoDurationSec(winnerSd);
+      if (p && p > 0) probedDuration = Math.round(p);
+    } catch {}
+  }
+  if (probedDuration > 0) {
+    storyboard.approxDurationSec = probedDuration;
+  } else if (winnerVideoUrl && storyboard.approxDurationSec === 0) {
+    // We know it's a video ad but probe failed — assume 20s so routing
+    // doesn't crush to a single 5-10s clip. Honest about being a guess.
+    storyboard.approxDurationSec = 20;
+  }
+  console.log("[autopilot] winner duration probed=", probedDuration,
+    "storyboard.approxDurationSec=", storyboard.approxDurationSec,
+    "hd?", !!winnerHd, "sd?", !!winnerSd);
 
   const scriptOut = await writeAdScript({
     productTitle: product.title,
