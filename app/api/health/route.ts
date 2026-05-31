@@ -5,7 +5,8 @@ export const dynamic = "force-dynamic";
 
 const CHECKS = [
   { key: "ANTHROPIC_API_KEY", feature: "Script generation, ad scoring" },
-  { key: "REPLICATE_API_TOKEN", feature: "Video generation" },
+  { key: "REPLICATE_API_TOKEN", feature: "Video generation (Replicate models)" },
+  { key: "FAL_KEY", feature: "Showcase hero compositor + Kling i2v + stitch" },
   { key: "META_ACCESS_TOKEN", feature: "Campaign launch + scan" },
   { key: "META_AD_ACCOUNT_ID", feature: "Meta ad account routing" },
   { key: "SHOPIFY_SHOP_DOMAIN", feature: "Product picker" },
@@ -14,6 +15,9 @@ const CHECKS = [
   { key: "SUPABASE_URL", feature: "Library persistence", optional: true },
   { key: "SUPABASE_SERVICE_KEY", feature: "Library persistence", optional: true },
   { key: "OPENAI_API_KEY", feature: "Whisper transcription", optional: true },
+  { key: "HIGGSFIELD_API_KEY", feature: "Premium UGC actor + product fusion", optional: true },
+  { key: "ELEVENLABS_API_KEY", feature: "Voice clone TTS", optional: true },
+  { key: "CRON_SECRET", feature: "Cron auth (fail-closed)", optional: true },
 ];
 
 export async function GET() {
