@@ -1,13 +1,17 @@
 import Link from "next/link";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = { title: "דשבורד" };
 
 const navItems = [
-  { href: "/autopilot", label: "Autopilot", icon: "🤖", desc: "Paste competitor URL → live Meta campaign in one click" },
-  { href: "/app/generate", label: "Generate", icon: "🎬", desc: "Create video ads from your products" },
-  { href: "/app/spy", label: "Spy", icon: "🕵️", desc: "Analyse competitor Facebook ads" },
-  { href: "/app/launch", label: "Launch", icon: "🚀", desc: "Push campaigns to Meta" },
-  { href: "/app/library", label: "Library", icon: "📚", desc: "Browse your saved creatives" },
-  { href: "/app/drafts", label: "Drafts", icon: "📝", desc: "Review auto-built ad drafts" },
-  { href: "/app/costs", label: "Costs", icon: "💰", desc: "Track AI & ad spend" },
+  { href: "/autopilot", label: "טייס אוטומטי", icon: "🤖", desc: "מהדבקת קישור מתחרה ועד קמפיין חי במטא בלחיצה אחת" },
+  { href: "/app/generate", label: "יצירה", icon: "🎬", desc: "הפקת סרטוני פרסומת מהמוצרים שלך" },
+  { href: "/app/brand", label: "מיתוג", icon: "🎨", desc: "לוגו, צבעים, גופן וקול המותג" },
+  { href: "/app/spy", label: "ריגול", icon: "🕵️", desc: "ניתוח פרסומות של מתחרים בפייסבוק" },
+  { href: "/app/launch", label: "השקה", icon: "🚀", desc: "העלאת קמפיינים למטא" },
+  { href: "/app/library", label: "ספרייה", icon: "📚", desc: "הקריאייטיבים השמורים שלך" },
+  { href: "/app/drafts", label: "טיוטות", icon: "📝", desc: "אישור טיוטות שנבנו אוטומטית" },
+  { href: "/app/costs", label: "עלויות", icon: "💰", desc: "מעקב אחר הוצאות בינה ופרסום" },
 ];
 
 export default function AppDashboard() {
@@ -16,9 +20,9 @@ export default function AppDashboard() {
       <div className="max-w-5xl mx-auto px-6 py-12">
         <div className="mb-10">
           <h1 className="text-3xl font-bold mb-1">
-            Welcome to <span className="text-violet-400">AdLab</span>
+            ברוכים הבאים ל<span className="text-violet-400">AdLab</span>
           </h1>
-          <p className="text-white/50">Choose a tool to get started.</p>
+          <p className="text-white/50">בחרו כלי כדי להתחיל.</p>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">

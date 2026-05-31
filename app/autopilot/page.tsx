@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { GenerationStream, type StreamTile } from "@/components/GenerationStream";
 
 type Stage = "idle" | "scanning" | "rendering" | "review" | "launching" | "launched" | "error";
 
@@ -74,6 +75,7 @@ const SHOWCASE_STAGE_LABEL: Record<ShowcaseStage, string> = {
   done: "הסרטון מוכן",
   failed: "נכשל",
 };
+const SHOWCASE_STAGES: ShowcaseStage[] = ["hero", "animate", "done"];
 
 type UgcStage = "actor" | "composite" | "animate" | "tts" | "lipsync" | "done" | "failed";
 interface UgcState {
@@ -120,10 +122,10 @@ type VideoModelChoice =
   | "seedance-2.0";
 
 const VIDEO_MODELS: { value: VideoModelChoice; label: string; note: string }[] = [
-  { value: "veo-3.1-fast", label: "Veo 3.1 Fast — מומלץ", note: "Google Veo 3.1, 8s, קול מובנה, איכות מצוינת ($)" },
-  { value: "sora-2-pro", label: "Sora 2 Pro — ריאליזם מקסימלי", note: "OpenAI, פרימיום, איכות הגבוהה ביותר ($$$)" },
-  { value: "kling-3.0", label: "Kling 3 Pro — סרטון ארוך", note: "עד 15 שניות, מלך ה-UGC הארוך ($$)" },
-  { value: "seedance-2.0", label: "Seedance 2.0 — תנועה דינמית", note: "Bytedance, ספורט/מחול/אקשן ($)" },
+  { value: "veo-3.1-fast", label: "Veo 3.1 Fast, מומלץ", note: "Google Veo 3.1, שמונה שניות, קול מובנה, איכות מצוינת ($)" },
+  { value: "sora-2-pro", label: "Sora 2 Pro, ריאליזם מקסימלי", note: "OpenAI, פרימיום, האיכות הגבוהה ביותר ($$$)" },
+  { value: "kling-3.0", label: "Kling 3 Pro, סרטון ארוך", note: "עד חמש עשרה שניות, מצוין לתוכן גולשים ארוך ($$)" },
+  { value: "seedance-2.0", label: "Seedance 2.0, תנועה דינמית", note: "Bytedance, ספורט, מחול ואקשן ($)" },
 ];
 
 export default function AutopilotPage() {
@@ -545,7 +547,7 @@ export default function AutopilotPage() {
 
   async function runAutopilot() {
     if (!competitorInput.trim()) {
-      setError("הכנס כתובת מתחרה או שם מותג");
+      setError("הזינו כתובת של מתחרה או שם מותג");
       return;
     }
     setError("");
@@ -652,10 +654,10 @@ export default function AutopilotPage() {
       <div className="max-w-3xl mx-auto space-y-8">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">
-            <span className="text-violet-400">טייס אוטומטי</span> — מ-URL לקמפיין חי
+            <span className="text-violet-400">טייס אוטומטי</span>, מכתובת לקמפיין חי
           </h1>
           <p className="mt-2 text-white/50 text-sm">
-            הדבק כתובת מתחרה (Ad Library או דומיין) ונבנה קמפיין שלם — סריקה, ניתוח, וידאו, קופי. אתה רק מאשר.
+            הדביקו כתובת של מתחרה (ספריית המודעות או דומיין) ונבנה קמפיין שלם: סריקה, ניתוח, וידאו וטקסט שיווקי. אתם רק מאשרים.
           </p>
         </div>
 
@@ -688,12 +690,12 @@ export default function AutopilotPage() {
                 className="w-full bg-black border border-white/15 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
               >
                 <option value="auto">אוטומטי (לפי המתחרה)</option>
-                <option value="showcase">תצוגת מוצר — תקריב יוקרתי של התכשיט בלבד</option>
-                <option value="ugc">UGC — דמות אמיתית מחזיקה את המוצר ומדברת</option>
+                <option value="showcase">תצוגת מוצר, תקריב יוקרתי של התכשיט בלבד</option>
+                <option value="ugc">תוכן גולשים, דמות אמיתית מחזיקה את המוצר ומדברת</option>
                 <option value="video">סרטון רגיל (Veo / Kling / Sora)</option>
               </select>
               <p className="text-xs text-white/40">
-                תצוגת מוצר = רק התכשיט שלך, ללא שחקן, סטודיו יוקרתי. UGC = שחקן AI עם פנים, מחזיק את המוצר שלך, מדבר עם שפתיים בסנכרון. סרטון רגיל = סצנה גנרית.
+                תצוגת מוצר מציגה את התכשיט בלבד, ללא שחקן, בסטודיו יוקרתי. תוכן גולשים מציג דמות עם פנים שמחזיקה את המוצר ומדברת בסנכרון שפתיים. סרטון רגיל מציג סצנה כללית.
               </p>
             </div>
             <div className="space-y-2">
@@ -729,7 +731,7 @@ export default function AutopilotPage() {
                 onChange={(e) => setVideoDuration(Number(e.target.value))}
                 className="w-full bg-black border border-white/15 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
               >
-                <option value={0}>אוטומטי (לפי המתחרה) — מומלץ</option>
+                <option value={0}>אוטומטי (לפי המתחרה), מומלץ</option>
                 <option value={8}>8 שניות</option>
                 <option value={10}>10 שניות</option>
                 <option value={15}>15 שניות</option>
@@ -739,20 +741,20 @@ export default function AutopilotPage() {
                 <option value={60}>60 שניות</option>
               </select>
               <p className="text-xs text-white/40">
-                סרטון רציף, ללא חתכים נראים. אוטומטי = מדדים את אורך הסרטון של המתחרה ומתאימים. עד 15 שניות מיוצר כקליפ אחד אחיד; מעל זה חיבור חלק עם המשכיות ויזואלית מלאה.
+                סרטון רציף, ללא חתכים נראים. במצב אוטומטי מודדים את אורך הסרטון של המתחרה ומתאימים. עד חמש עשרה שניות הסרטון מיוצר כקליפ אחד אחיד, ומעבר לכך מתבצע חיבור חלק עם המשכיות ויזואלית מלאה.
               </p>
             </div>
             <div className="space-y-2">
-              <label className="block text-sm font-medium text-white/80">שיפור ריאליזם (פוסט-פרודקשן)</label>
+              <label className="block text-sm font-medium text-white/80">שיפור ריאליזם (עיבוד מתקדם)</label>
               <select
                 value={postProcess}
                 onChange={(e) => setPostProcess(e.target.value as "off" | "fast" | "speel" | "speel-4k")}
                 className="w-full bg-black border border-white/15 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
               >
-                <option value="fast">מהיר — גרעין סרט + תיקון צבע (מומלץ)</option>
-                <option value="speel">מקסימום — אינטרפולציה ל-48fps + גרעין + צבע</option>
-                <option value="speel-4k">איכות Speel — 48fps + שדרוג ל-4K + גרעין</option>
-                <option value="off">כבוי — סרטון גולמי בלי שיפור</option>
+                <option value="fast">מהיר: גרעין סרט ותיקון צבע (מומלץ)</option>
+                <option value="speel">מקסימום: האצה ל-48 פריימים, גרעין וצבע</option>
+                <option value="speel-4k">איכות Speel: 48 פריימים, שדרוג ל-4K וגרעין</option>
+                <option value="off">כבוי: סרטון גולמי ללא שיפור</option>
               </select>
               <p className="text-xs text-white/40">
                 מהיר: כ-10 שניות, חינם. מקסימום: כ-60 שניות, ~$0.05. איכות Speel: כ-3 דקות, ~$0.20, 4K משודרג.
@@ -791,90 +793,37 @@ export default function AutopilotPage() {
                   : enhanceError
                     ? `שיפור ריאליזם נכשל (משתמש בסרטון הגולמי): ${enhanceError}`
                     : enhancedUrl
-                      ? "הסרטון משופר ומוכן — בדוק ואשר"
-                      : "הוידאו מוכן — בדוק ואשר"}
+                      ? "הסרטון משופר ומוכן, בדקו ואשרו"
+                      : "הסרטון מוכן, בדקו ואשרו"}
             </div>
 
             {/* UGC pipeline progress */}
             {result.mode === "ugc" && (
               <section className="space-y-3">
-                <h2 className="text-xs font-semibold text-white/60 uppercase tracking-wider">
-                  צינור UGC — דמות אמיתית מדברת
-                </h2>
-
-                {/* Stage strip */}
-                <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
-                  <div className="flex items-center justify-between gap-1">
-                    {UGC_STAGES.filter((s) => s !== "done").map((s) => {
-                      const currentIdx = ugcState ? UGC_STAGES.indexOf(ugcState.stage) : -1;
-                      const myIdx = UGC_STAGES.indexOf(s);
-                      const isDone = currentIdx > myIdx || ugcState?.stage === "done";
-                      const isActive = currentIdx === myIdx && ugcState?.stage !== "failed";
-                      const isFailed = ugcState?.stage === "failed" && currentIdx === myIdx;
-                      return (
-                        <div key={s} className="flex-1 flex flex-col items-center gap-1">
-                          <div
-                            className={`w-6 h-6 rounded-full border-2 flex items-center justify-center text-[10px] font-bold transition-colors ${
-                              isFailed
-                                ? "border-red-500 bg-red-950 text-red-300"
-                                : isDone
-                                  ? "border-emerald-500 bg-emerald-950 text-emerald-300"
-                                  : isActive
-                                    ? "border-violet-400 bg-violet-950 text-violet-200 animate-pulse"
-                                    : "border-white/20 bg-black text-white/40"
-                            }`}
-                          >
-                            {isDone ? "✓" : isFailed ? "!" : myIdx + 1}
-                          </div>
-                          <div className="text-[10px] text-white/50 text-center leading-tight">
-                            {UGC_STAGE_LABEL[s]}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div className="text-sm text-white/70 text-center">
-                    {ugcState
-                      ? ugcState.stage === "done"
-                        ? "הסרטון מוכן."
-                        : ugcState.stage === "failed"
-                          ? `נכשל: ${ugcState.error || "שגיאה"}`
-                          : `${UGC_STAGE_LABEL[ugcState.stage]}...`
-                      : "מאתחל..."}
-                  </div>
-                </div>
-
-                {/* Artifact previews */}
-                <div className="grid grid-cols-3 gap-2">
-                  <div className="space-y-1">
-                    <div className="text-[10px] text-white/40">שחקן/ית</div>
-                    {ugcState?.artifacts.actorImageUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={ugcState.artifacts.actorImageUrl} alt="actor" className="w-full aspect-[9/16] object-cover rounded-lg border border-white/10" />
-                    ) : (
-                      <div className="aspect-[9/16] bg-zinc-900 border border-white/10 rounded-lg" />
-                    )}
-                  </div>
-                  <div className="space-y-1">
-                    <div className="text-[10px] text-white/40">עם המוצר</div>
-                    {ugcState?.artifacts.compositeImageUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={ugcState.artifacts.compositeImageUrl} alt="composite" className="w-full aspect-[9/16] object-cover rounded-lg border border-white/10" />
-                    ) : (
-                      <div className="aspect-[9/16] bg-zinc-900 border border-white/10 rounded-lg" />
-                    )}
-                  </div>
-                  <div className="space-y-1">
-                    <div className="text-[10px] text-white/40">סרטון מסונכרן</div>
-                    {ugcState?.artifacts.finalVideoUrl ? (
-                      <video src={ugcState.artifacts.finalVideoUrl} controls className="w-full aspect-[9/16] object-cover rounded-lg border border-emerald-500/40 bg-zinc-900" />
-                    ) : ugcState?.artifacts.rawVideoUrl ? (
-                      <video src={ugcState.artifacts.rawVideoUrl} controls muted className="w-full aspect-[9/16] object-cover rounded-lg border border-white/10 bg-zinc-900" />
-                    ) : (
-                      <div className="aspect-[9/16] bg-zinc-900 border border-white/10 rounded-lg" />
-                    )}
-                  </div>
-                </div>
+                <GenerationStream
+                  title="צינור UGC, דמות אמיתית מדברת"
+                  steps={UGC_STAGES.filter((s) => s !== "done").map((s) => ({
+                    key: s,
+                    label: UGC_STAGE_LABEL[s],
+                  }))}
+                  stepOrder={UGC_STAGES}
+                  currentKey={ugcState?.stage ?? ""}
+                  done={ugcState?.stage === "done"}
+                  failed={ugcState?.stage === "failed"}
+                  errorText={ugcState?.error}
+                  activeLabel={ugcState ? UGC_STAGE_LABEL[ugcState.stage] : undefined}
+                  live={!!ugcState}
+                  tiles={[
+                    { label: "שחקן/ית", url: ugcState?.artifacts.actorImageUrl, kind: "image" },
+                    { label: "עם המוצר", url: ugcState?.artifacts.compositeImageUrl, kind: "image" },
+                    {
+                      label: "סרטון מסונכרן",
+                      url: ugcState?.artifacts.finalVideoUrl || ugcState?.artifacts.rawVideoUrl,
+                      kind: "video",
+                      highlight: !!ugcState?.artifacts.finalVideoUrl,
+                    },
+                  ] satisfies StreamTile[]}
+                />
 
                 {/* P2 — Variant fan-out grid */}
                 {result.mode === "ugc" && ugcState?.stage === "done" && (
@@ -933,50 +882,35 @@ export default function AutopilotPage() {
             {/* Showcase pipeline progress */}
             {result.mode === "showcase" && (
               <section className="space-y-3">
-                <h2 className="text-xs font-semibold text-white/60 uppercase tracking-wider">
-                  צינור תצוגת מוצר
-                </h2>
-                <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
-                  <div className="text-sm text-white/70 text-center">
-                    {showcaseState
-                      ? showcaseState.stage === "done"
-                        ? "הסרטון מוכן."
-                        : showcaseState.stage === "failed"
-                          ? `נכשל: ${showcaseState.error || "שגיאה"}`
-                          : `${SHOWCASE_STAGE_LABEL[showcaseState.stage]}...`
-                      : "מאתחל..."}
-                  </div>
-                  {showcaseState?.qualityScore !== undefined && (
-                    <div className={`text-xs text-center ${showcaseState.qualityScore >= 7 ? "text-emerald-300" : "text-amber-300"}`}>
-                      איכות סרטון (Claude Vision): {showcaseState.qualityScore}/10
-                      {showcaseState.qualityAttempt && showcaseState.qualityAttempt > 1
-                        ? ` (ניסיון ${showcaseState.qualityAttempt})`
-                        : ""}
-                      {showcaseState.qualityReasons && showcaseState.qualityReasons.length > 0 && (
-                        <div className="text-white/40 mt-1">{showcaseState.qualityReasons.slice(0, 2).join(" · ")}</div>
-                      )}
-                    </div>
-                  )}
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="space-y-1">
-                    <div className="text-[10px] text-white/40">תמונת מוצר (הרו)</div>
-                    {showcaseState?.artifacts.heroImageUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={showcaseState.artifacts.heroImageUrl} alt="hero" className="w-full aspect-[9/16] object-cover rounded-lg border border-white/10" />
-                    ) : (
-                      <div className="aspect-[9/16] bg-zinc-900 border border-white/10 rounded-lg" />
+                <GenerationStream
+                  title="צינור תצוגת מוצר"
+                  steps={SHOWCASE_STAGES.filter((s) => s !== "done").map((s) => ({
+                    key: s,
+                    label: SHOWCASE_STAGE_LABEL[s],
+                  }))}
+                  stepOrder={SHOWCASE_STAGES}
+                  currentKey={showcaseState?.stage ?? ""}
+                  done={showcaseState?.stage === "done"}
+                  failed={showcaseState?.stage === "failed"}
+                  errorText={showcaseState?.error}
+                  activeLabel={showcaseState ? SHOWCASE_STAGE_LABEL[showcaseState.stage] : undefined}
+                  live={!!showcaseState}
+                  tiles={[
+                    { label: "תמונת מוצר (הרו)", url: showcaseState?.artifacts.heroImageUrl, kind: "image" },
+                    { label: "סרטון", url: showcaseState?.artifacts.videoUrl, kind: "video", highlight: true },
+                  ] satisfies StreamTile[]}
+                />
+                {showcaseState?.qualityScore !== undefined && (
+                  <div className={`text-xs text-center ${showcaseState.qualityScore >= 7 ? "text-emerald-300" : "text-amber-300"}`}>
+                    איכות סרטון (Claude Vision): {showcaseState.qualityScore}/10
+                    {showcaseState.qualityAttempt && showcaseState.qualityAttempt > 1
+                      ? ` (ניסיון ${showcaseState.qualityAttempt})`
+                      : ""}
+                    {showcaseState.qualityReasons && showcaseState.qualityReasons.length > 0 && (
+                      <div className="text-white/40 mt-1">{showcaseState.qualityReasons.slice(0, 2).join(" · ")}</div>
                     )}
                   </div>
-                  <div className="space-y-1">
-                    <div className="text-[10px] text-white/40">סרטון</div>
-                    {showcaseState?.artifacts.videoUrl ? (
-                      <video src={showcaseState.artifacts.videoUrl} controls className="w-full aspect-[9/16] object-cover rounded-lg border border-emerald-500/40 bg-zinc-900" />
-                    ) : (
-                      <div className="aspect-[9/16] bg-zinc-900 border border-white/10 rounded-lg" />
-                    )}
-                  </div>
-                </div>
+                )}
               </section>
             )}
 
@@ -1074,7 +1008,7 @@ export default function AutopilotPage() {
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <div>
                   <div className="text-white/40 text-xs">מתחרה</div>
-                  <div className="text-white">{result.competitorPageName || "—"}</div>
+                  <div className="text-white">{result.competitorPageName || "·"}</div>
                 </div>
                 <div>
                   <div className="text-white/40 text-xs">סגנון</div>
@@ -1118,7 +1052,7 @@ export default function AutopilotPage() {
 
             {/* Headlines */}
             <section className="bg-white/5 border border-white/10 rounded-xl p-5 space-y-3">
-              <h2 className="text-xs font-semibold text-white/60 uppercase tracking-wider">בחר Headline</h2>
+              <h2 className="text-xs font-semibold text-white/60 tracking-wider">בחרו כותרת</h2>
               <div className="space-y-2">
                 {result.headlines.map((h, i) => (
                   <label key={i} className="flex items-start gap-3 cursor-pointer bg-black/40 border border-white/10 hover:border-violet-500/40 rounded-lg p-3 transition-colors">
@@ -1137,7 +1071,7 @@ export default function AutopilotPage() {
 
             {/* Body copy */}
             <section className="bg-white/5 border border-white/10 rounded-xl p-5 space-y-2">
-              <h2 className="text-xs font-semibold text-white/60 uppercase tracking-wider">קופי (ניתן לערוך)</h2>
+              <h2 className="text-xs font-semibold text-white/60 tracking-wider">טקסט שיווקי (ניתן לעריכה)</h2>
               <textarea
                 value={editedBody}
                 onChange={(e) => setEditedBody(e.target.value)}
@@ -1164,7 +1098,7 @@ export default function AutopilotPage() {
                 disabled={!videoUrl || stage === "launching"}
                 className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-900 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-lg transition-colors"
               >
-                {stage === "launching" ? "מעלה..." : !videoUrl ? "ממתין לוידאו..." : "אשר והעלה לאוויר"}
+                {stage === "launching" ? "מעלה..." : !videoUrl ? "ממתין לסרטון..." : "אשרו והעלו לאוויר"}
               </button>
               <button
                 onClick={reject}

@@ -1,11 +1,35 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { headers } from "next/headers";
+import { Heebo } from "next/font/google";
 import "./globals.css";
 
+const heebo = Heebo({
+  subsets: ["hebrew", "latin"],
+  weight: ["400", "500", "600", "700"],
+  display: "swap",
+  variable: "--font-heebo",
+});
+
 export const metadata: Metadata = {
-  title: "AdLab — AI-powered ad creation & launch",
+  metadataBase: new URL("https://adlab-amber.vercel.app"),
+  title: {
+    default: "AdLab · יצירה והשקה של פרסומות בבינה",
+    template: "%s · AdLab",
+  },
   description:
-    "Generate video ads, spy on competitors, and launch to Meta — all in one place.",
+    "AdLab כותב תסריטים, מפיק סרטוני פרסומת, מנתח מתחרים ומשיק קמפיינים ישירות למטא. הכל ממקום אחד.",
+  openGraph: {
+    title: "AdLab · יצירה והשקה של פרסומות בבינה",
+    description:
+      "כותב תסריטים, מפיק סרטונים, מנתח מתחרים ומשיק קמפיינים למטא. הכל ממקום אחד.",
+    type: "website",
+    locale: "he_IL",
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#0a0a0a",
+  colorScheme: "dark",
 };
 
 // Default to Hebrew RTL — the primary audience. Admin pages can override per
@@ -29,22 +53,7 @@ export default async function RootLayout({
 }) {
   const { lang, dir } = await resolveLang();
   return (
-    <html lang={lang} dir={dir} className="dark">
-      <head>
-        <link
-          rel="preconnect"
-          href="https://fonts.googleapis.com"
-        />
-        <link
-          rel="preconnect"
-          href="https://fonts.gstatic.com"
-          crossOrigin="anonymous"
-        />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700&display=swap"
-          rel="stylesheet"
-        />
-      </head>
+    <html lang={lang} dir={dir} className={`dark ${heebo.variable}`}>
       <body className="bg-black text-white antialiased font-sans">
         {children}
       </body>
