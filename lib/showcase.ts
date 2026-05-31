@@ -398,9 +398,28 @@ async function submitHero(state: ShowcaseState): Promise<void> {
           output_format: "jpeg",
         };
 
-  const { request_id } = await falLib.submit(endpoint, input);
-  state.pending = { provider: "fal", endpoint, jobId: request_id };
-  state.heroProvider = nextProvider;
+  try {
+    const { request_id } = await falLib.submit(endpoint, input);
+    state.pending = { provider: "fal", endpoint, jobId: request_id };
+    state.heroProvider = nextProvider;
+  } catch (e) {
+    // FAL key revoked / model gated → mark this provider as tried and walk to
+    // the next link in the chain. Eventually we land on raw-product which
+    // animates straight off the Shopify image (no compositor needed).
+    if (isAuthError(e)) {
+      console.warn(`[showcase] hero ${nextProvider} auth failed (${errMsg(e)}); falling through`);
+      state.heroProvider = nextProvider;
+      state.pending = undefined;
+      await submitHero(state);
+      return;
+    }
+    throw e;
+  }
+}
+
+function isAuthError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return /unauthorized|cannot access application|forbidden|401|403/i.test(msg);
 }
 
 function nextHeroProvider(current?: HeroProvider): HeroProvider {
@@ -424,10 +443,23 @@ async function submitAnimate(state: ShowcaseState, which: AnimateModelId): Promi
 
   if (spec.provider === "fal") {
     const input = buildFalAnimateInput(which, state, prompt, duration);
-    const { request_id } = await falLib.submit(spec.endpoint, input);
-    state.pending = { provider: "fal", endpoint: spec.endpoint, jobId: request_id };
-    state.animateModel = which;
-    return;
+    try {
+      const { request_id } = await falLib.submit(spec.endpoint, input);
+      state.pending = { provider: "fal", endpoint: spec.endpoint, jobId: request_id };
+      state.animateModel = which;
+      return;
+    } catch (e) {
+      // Same FAL key fail mode as hero — walk the chain to a non-FAL provider.
+      if (isAuthError(e)) {
+        const next = nextAnimateModel(which);
+        if (!next) throw new Error(`animate: all providers failed (last auth error: ${errMsg(e)})`);
+        console.warn(`[showcase] animate ${which} auth failed (${errMsg(e)}); falling back to ${next}`);
+        state.animateModel = which;
+        state.pending = undefined;
+        return submitAnimate(state, next);
+      }
+      throw e;
+    }
   }
 
   // Replicate path
