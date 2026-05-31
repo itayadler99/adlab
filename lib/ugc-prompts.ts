@@ -154,16 +154,132 @@ const VOICE_LIBRARY: Record<VoiceArchetype, string> = {
   narrator_neutral:    "21m00Tcm4TlvDq8ikWAM", // Rachel — multilingual default
 };
 
+/**
+ * Hebrew voice library for the Israeli market. eleven-v3 is multilingual, so
+ * these default to the same well-known multilingual voice IDs as the English
+ * library, but they are split out so the owner can drop native Hebrew-speaker
+ * voice IDs per archetype via env without disturbing the English mapping.
+ *
+ * Override precedence (highest first):
+ *   1. ELEVENLABS_VOICE_HE_<ARCHETYPE>   e.g. ELEVENLABS_VOICE_HE_FOUNDER_MALE
+ *   2. ELEVENLABS_VOICE_HE               (single global Hebrew voice)
+ *   3. HEBREW_VOICE_LIBRARY[archetype]   (built-in multilingual default)
+ */
+const HEBREW_VOICE_LIBRARY: Record<VoiceArchetype, string> = {
+  rapper_male:         "nPczCjzI2devNBz1zQrb", // Brian — deep, carries Hebrew well
+  rapper_female:       "cgSgspJ2msm6clMCkdW9", // Jessica
+  young_woman_excited: "cgSgspJ2msm6clMCkdW9", // Jessica
+  young_woman_chill:   "EXAVITQu4vr4xnSDxMaL", // Sarah
+  young_man_hype:      "bIHbv24MWmeRgasZH58o", // Will
+  young_man_casual:    "TX3LPaxmHKxFdv7VOQHJ", // Liam
+  founder_male:        "cjVigY5qzO86Huf0OWal", // Eric
+  founder_female:      "9BWtsMINqrJLrRacOk9x", // Aria
+  mom_warm:            "XrExE9yKIg1WjnnlVkGX", // Matilda
+  british_male:        "JBFqnCBsd6RMkjVDRZzb", // George
+  british_female:      "Xb7hH8MSUJpSbSDYk0k2", // Alice
+  narrator_neutral:    "21m00Tcm4TlvDq8ikWAM", // Rachel — multilingual default
+};
+
 /** Pick an ElevenLabs voice ID matching the archetype + language. */
 export function pickVoiceId(archetype?: VoiceArchetype, language: "en" | "he" = "en"): string {
-  // Hebrew: prefer explicit env override, else Rachel (multilingual handles Hebrew).
-  if (language === "he") {
-    return process.env.ELEVENLABS_VOICE_HE || VOICE_LIBRARY.narrator_neutral;
-  }
   const arch = archetype || "narrator_neutral";
+  if (language === "he") {
+    // Per-archetype Hebrew override, then global Hebrew override, then the
+    // built-in multilingual default for that archetype.
+    const perArch = process.env[`ELEVENLABS_VOICE_HE_${arch.toUpperCase()}`];
+    return perArch || process.env.ELEVENLABS_VOICE_HE || HEBREW_VOICE_LIBRARY[arch] || HEBREW_VOICE_LIBRARY.narrator_neutral;
+  }
   // Env override per archetype: ELEVENLABS_VOICE_RAPPER_MALE etc.
   const envKey = `ELEVENLABS_VOICE_${arch.toUpperCase()}`;
   return process.env[envKey] || VOICE_LIBRARY[arch] || VOICE_LIBRARY.narrator_neutral;
+}
+
+/**
+ * ElevenLabs v3 voice_settings, tuned per archetype and language.
+ *
+ * eleven-v3 reads four knobs:
+ *   - stability       lower = more emotional range / prosody variation,
+ *                     higher = steadier delivery. v3 sweet spots are
+ *                     ~0.3 (creative), ~0.5 (natural), ~0.7 (robust).
+ *   - similarity_boost how tightly to cling to the reference timbre.
+ *   - style           expressiveness / emphasis.
+ *   - speed           playback rate (0.7–1.2). Hebrew reads a touch slower
+ *                     than English at the same setting, so we nudge it down.
+ *
+ * Israeli-market Hebrew tuning: native Hebrew ad reads are warm and
+ * conversational rather than over-acted, so for Hebrew we lower stability a
+ * notch for natural cadence, trim style slightly to avoid a sing-song
+ * accent, and slow speed to ~0.95 so phonemes land cleanly (which also helps
+ * the downstream lipsync — see step 2).
+ */
+export interface VoiceSettings {
+  stability: number;
+  similarity_boost: number;
+  style: number;
+  use_speaker_boost: boolean;
+  speed: number;
+}
+
+function baseVoiceSettings(arch: VoiceArchetype): VoiceSettings {
+  switch (arch) {
+    // High-energy reads: looser stability, more style, a hair faster.
+    case "rapper_male":
+    case "rapper_female":
+    case "young_man_hype":
+    case "young_woman_excited":
+      return { stability: 0.35, similarity_boost: 0.8, style: 0.6, use_speaker_boost: true, speed: 1.04 };
+    // Calm, authoritative reads: steadier, less style.
+    case "founder_male":
+    case "founder_female":
+    case "narrator_neutral":
+      return { stability: 0.6, similarity_boost: 0.75, style: 0.3, use_speaker_boost: true, speed: 1.0 };
+    // Warm, relatable reads.
+    case "mom_warm":
+    case "young_woman_chill":
+    case "young_man_casual":
+      return { stability: 0.5, similarity_boost: 0.78, style: 0.4, use_speaker_boost: true, speed: 1.0 };
+    default:
+      return { stability: 0.5, similarity_boost: 0.75, style: 0.4, use_speaker_boost: true, speed: 1.0 };
+  }
+}
+
+export function buildVoiceSettings(archetype?: VoiceArchetype, language: "en" | "he" = "en"): VoiceSettings {
+  const base = baseVoiceSettings(archetype || "narrator_neutral");
+  if (language !== "he") return base;
+  // Hebrew adjustments for the Israeli market.
+  return {
+    stability: Math.max(0.3, base.stability - 0.05),
+    similarity_boost: base.similarity_boost,
+    style: Math.max(0.2, base.style - 0.1),
+    use_speaker_boost: true,
+    speed: Math.min(base.speed, 0.96),
+  };
+}
+
+/**
+ * Clean a script before sending it to TTS.
+ *
+ * For Hebrew we strip Latin letters so eleven-v3 does not code-switch into an
+ * English accent mid-sentence (the owner's #1 Hebrew-copy complaint), drop
+ * em-dashes (owner preference), collapse the bidi mess of mixed digits, and
+ * normalize whitespace/quotes. English is only lightly normalized.
+ */
+export function sanitizeScriptForTts(script: string, language: "en" | "he" = "en"): string {
+  let s = (script || "")
+    // URLs and emoji read as gibberish in TTS — strip them in both languages.
+    .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE00}-\u{FE0F}\u{1F1E6}-\u{1F1FF}]/gu, " ")
+    .replace(/[–—]/g, language === "he" ? "," : "-") // em/en dash → comma (he) / hyphen (en)
+    .replace(/[“”„‟]/g, '"')
+    .replace(/[‘’‚‛]/g, "'");
+  if (language === "he") {
+    // Remove Latin letters and any standalone English words; keep Hebrew,
+    // digits, punctuation and whitespace. Then squeeze the gaps that leaves.
+    s = s
+      .replace(/[A-Za-z]+/g, " ")
+      .replace(/\s+([,.!?:;])/g, "$1");
+  }
+  return s.replace(/[ \t]+/g, " ").replace(/\s*\n\s*/g, "\n").trim();
 }
 
 /** Heuristic: map a free-text archetype label from the LLM to our enum. */

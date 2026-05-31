@@ -9,9 +9,12 @@
 //   3. Caller passes the .ass path to `lib/postprocess.ts` which burns it in
 //      via the `ass=...` ffmpeg filter (libass — NOT drawtext).
 //
-// RTL-aware: when language is `"he"`, we wrap each word in `\rtl1` (libass
-// understands embedding levels via fribidi linkage in newer builds). For
-// older libass we additionally reverse the text — both are safe.
+// RTL-aware: when language is `"he"`, each word is wrapped in a Unicode
+// right-to-left embedding (U+202B … U+202C). libass is built against fribidi
+// and resolves bidi per event, so the embedding pins the base direction to
+// RTL — Hebrew words read right-to-left and any attached digits / Latin run
+// sit on the correct side. (ASS has no real `\rtl` tag; the embedding is the
+// portable way to do this.)
 
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -45,15 +48,31 @@ function fmtTs(sec: number): string {
   return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}.${cs.toString().padStart(2, "0")}`;
 }
 
-function hexToAssColor(hex: string | undefined, fallback = "&H00FFFF&"): string {
-  // ASS expects &HBBGGRR&. Default fallback yellow.
+function hexToAssColor(hex: string | undefined, fallback = "&H0000FFFF"): string {
+  // ASS style colours are &HAABBGGRR (AA=00 = fully opaque). Default = yellow.
   if (!hex) return fallback;
   const m = hex.replace("#", "").match(/^([0-9a-f]{6})$/i);
   if (!m) return fallback;
   const r = m[1].slice(0, 2);
   const g = m[1].slice(2, 4);
   const b = m[1].slice(4, 6);
-  return `&H00${b}${g}${r}&`.toUpperCase();
+  return `&H00${b}${g}${r}`.toUpperCase();
+}
+
+// `\1c` (primary colour override) wants &HBBGGRR with no alpha and no trailing
+// ampersand — derive it from the 8-hex style colour.
+function toOverrideColor(assColor: string): string {
+  const hex = assColor.replace(/^&H/i, "").replace(/&$/, "");
+  const bgr = hex.length >= 8 ? hex.slice(2) : hex; // drop the AA alpha byte
+  return `&H${bgr.toUpperCase()}&`;
+}
+
+// Wrap a string in a Unicode RTL embedding so libass/fribidi render it
+// right-to-left with a stable base direction.
+const RLE = "‫";
+const PDF = "‬";
+function toRtl(text: string): string {
+  return `${RLE}${text}${PDF}`;
 }
 
 /**
@@ -65,7 +84,8 @@ export function buildAssFile(opts: CaptionBuildOpts): string {
   const h = opts.videoHeight ?? 1920;
   const fontFamily = opts.fontFamily ?? (opts.language === "he" ? "Heebo" : "Inter");
   const fontSize = opts.fontSize ?? 96;
-  const primary = hexToAssColor(opts.highlightHex, "&H00FFFF&");
+  const primary = hexToAssColor(opts.highlightHex, "&H0000FFFF");
+  const primaryOverride = toOverrideColor(primary);
   // Alignment: 2 = bottom-center, 5 = middle-center, 8 = top-center.
   const align = opts.position === "top" ? 8 : opts.position === "middle" ? 5 : 2;
   const marginV = opts.position === "middle" ? 0 : 220;
@@ -99,8 +119,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     if (!safe) continue;
     // Bounce + fade tags. \t(0,150,\fscx115\fscy115) scales the word up 15%
     // over the first 150ms, \fad(60,60) gives a soft fade in/out.
-    const tags = `{\\fad(60,60)\\fscx100\\fscy100\\t(0,150,\\fscx115\\fscy115)\\t(150,250,\\fscx100\\fscy100)\\bord4\\3c&H000000&\\1c${primary.replace(/^&H00/, "&H00")}\\b1}`;
-    const text = opts.language === "he" ? safe : safe;
+    const tags = `{\\fad(60,60)\\fscx100\\fscy100\\t(0,150,\\fscx115\\fscy115)\\t(150,250,\\fscx100\\fscy100)\\bord4\\3c&H000000&\\1c${primaryOverride}\\b1}`;
+    const text = opts.language === "he" ? toRtl(safe) : safe;
     lines.push(`Dialogue: 0,${start},${end},Pop,,0,0,0,,${tags}${text}`);
   }
 

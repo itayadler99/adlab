@@ -9,12 +9,15 @@ import {
   buildCompositeRetryPrompt,
   buildAnimationPrompt,
   pickVoiceId,
+  buildVoiceSettings,
+  sanitizeScriptForTts,
   normalizeArchetype,
   type UgcPromptCtx,
   type VoiceArchetype,
 } from "./ugc-prompts";
 import { checkCompositePreservesProduct } from "./vision-check";
-import { renderSoulFrame, predictVirality } from "./higgsfield";
+import { predictVirality } from "./higgsfield";
+import { renderSoulActorFrame, getPresetSoul } from "./souls";
 
 const COMPOSITE_VISION_THRESHOLD = 6; // confidence below this triggers a retry
 const COMPOSITE_MAX_ATTEMPTS = 2;     // first attempt + 1 retry
@@ -38,61 +41,23 @@ export const FAL = {
 const REPLICATE_LIPSYNC_PRIMARY = "sync/lipsync-2" as const;
 const REPLICATE_LIPSYNC_LASTRESORT = "cjwbw/wav2lip" as const;
 
+// sync/lipsync-2 is audio-driven (it tracks the waveform, not a phoneme
+// transcript), so Hebrew accuracy is won two ways: (1) cleaner, slower Hebrew
+// TTS upstream — see buildVoiceSettings in ugc-prompts; (2) a lower temperature
+// here so the model tracks the audio tightly instead of inventing expressive
+// mouth shapes that read as wrong on non-English phonemes. `cut_off` keeps the
+// output the length of the (shorter) source rather than looping.
+// `LIPSYNC2_TEMPERATURE` env lets the owner retune or zero it out if a future
+// model build rejects the field (the chain falls through to FAL on a 422).
+const LIPSYNC2_TEMPERATURE = (() => {
+  const raw = Number(process.env.LIPSYNC2_TEMPERATURE);
+  return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.5;
+})();
+
 // Phase 9: Replicate Veo 3 Fast (i2v) is the primary animate path now because
 // the production FAL_KEY is revoked. FAL Veo stays as tier-2 fallback in case
 // the key is rotated later.
 const REPLICATE_ANIMATE_PRIMARY = "google/veo-3-fast" as const;
-
-// Phase 9 TTS: direct ElevenLabs (if ELEVENLABS_API_KEY) → Replicate xtts-v2 →
-// FAL eleven-v3 (only if FAL_KEY ever rotates back to working).
-const REPLICATE_TTS_FALLBACK = "lucataco/xtts-v2" as const;
-
-// Phase 9 actor (t2i): Replicate flux-1.1-pro-ultra primary, FAL flux-pro fallback.
-const REPLICATE_ACTOR_PRIMARY = "black-forest-labs/flux-1.1-pro-ultra" as const;
-// Phase 9 composite (i2i edit): Replicate google/nano-banana primary, FAL nano-banana fallback.
-const REPLICATE_COMPOSITE_PRIMARY = "google/nano-banana" as const;
-const ELEVENLABS_DIRECT_VOICE_DEFAULTS = {
-  stability: 0.5,
-  similarity_boost: 0.75,
-  style: 0.4,
-  use_speaker_boost: true,
-} as const;
-
-/**
- * Direct ElevenLabs TTS — POST /v1/text-to-speech/{voice_id} returns raw audio
- * bytes. We upload to Vercel Blob and return the public URL so the rest of the
- * pipeline can keep treating audio as a URL.
- */
-async function synthElevenLabsDirect(args: {
-  text: string;
-  voiceId: string;
-  modelId?: string;
-}): Promise<string | null> {
-  const apiKey = process.env.ELEVENLABS_API_KEY;
-  if (!apiKey) return null;
-  const url = `https://api.elevenlabs.io/v1/text-to-speech/${args.voiceId}`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "xi-api-key": apiKey,
-      "Content-Type": "application/json",
-      Accept: "audio/mpeg",
-    },
-    body: JSON.stringify({
-      text: args.text,
-      model_id: args.modelId ?? "eleven_v3",
-      voice_settings: ELEVENLABS_DIRECT_VOICE_DEFAULTS,
-    }),
-  });
-  if (!res.ok) {
-    throw new Error(`elevenlabs ${res.status}: ${await res.text().catch(() => "")}`);
-  }
-  const buf = Buffer.from(await res.arrayBuffer());
-  const { put } = await import("@vercel/blob");
-  const key = `ugc/tts/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp3`;
-  const blob = await put(key, buf, { access: "public", contentType: "audio/mpeg" });
-  return blob.url;
-}
 
 const replicate = () => new Replicate({ auth: process.env.REPLICATE_API_TOKEN });
 
@@ -166,7 +131,7 @@ export interface UgcState {
    * sync/lipsync-2, 2 = FAL sync-lipsync/v2, 3 = Replicate cjwbw/wav2lip).
    * Bumped automatically when a tier fails at submit or poll time.
    */
-  lipsyncTier?: 1 | 2;
+  lipsyncTier?: 1 | 2 | 3;
   /** Virality score (0-100) once the gate has run, plus any reasons. */
   viralityScore?: number;
   viralityReasons?: string[];
@@ -214,8 +179,8 @@ export async function advanceUgc(state: UgcState): Promise<UgcState> {
     // tearing down the whole pipeline — that's the whole point of the chain.
     if (state.stage === "lipsync") {
       const currentTier = state.lipsyncTier ?? 1;
-      if (currentTier < 2) {
-        const nextTier = 2 as const;
+      if (currentTier < 3) {
+        const nextTier = (currentTier + 1) as 2 | 3;
         console.warn(
           `[ugc] lipsync tier ${currentTier} poll failed (${job.error || "unknown"}); falling through to tier ${nextTier}`
         );
@@ -226,6 +191,20 @@ export async function advanceUgc(state: UgcState): Promise<UgcState> {
           state.updatedAt = Date.now();
           return state;
         } catch (e) {
+          // Submit-side failure on next tier — keep falling through.
+          if (nextTier < 3) {
+            try {
+              await submitLipsyncTier(state, 3);
+              state.lipsyncTier = 3;
+              state.updatedAt = Date.now();
+              return state;
+            } catch (e2) {
+              state.stage = "failed";
+              state.error = e2 instanceof Error ? e2.message : String(e2);
+              state.updatedAt = Date.now();
+              return state;
+            }
+          }
           state.stage = "failed";
           state.error = e instanceof Error ? e.message : String(e);
           state.updatedAt = Date.now();
@@ -353,7 +332,7 @@ async function submitStage(
       // never blocks on Higgsfield availability.
       if (state.inputs.soulId) {
         try {
-          const soulFrameUrl = await renderSoulFrame({
+          const soulFrameUrl = await renderSoulActorFrame({
             soulId: state.inputs.soulId,
             prompt: buildActorPrompt(ctx),
             aspectRatio: "9:16",
@@ -374,30 +353,14 @@ async function submitStage(
           );
         }
       }
-      // Phase 9 primary: Replicate flux-1.1-pro-ultra. FAL flux-pro is fallback.
-      const actorPrompt = buildActorPrompt(ctx);
-      try {
-        const prediction = await (replicate().predictions.create as (args: {
-          model: `${string}/${string}`;
-          input: Record<string, unknown>;
-        }) => Promise<{ id: string }>)({
-          model: REPLICATE_ACTOR_PRIMARY,
-          input: {
-            prompt: actorPrompt,
-            aspect_ratio: "9:16",
-            output_format: "jpg",
-            safety_tolerance: 5,
-          },
-        });
-        state.pending = { endpoint: REPLICATE_ACTOR_PRIMARY, jobId: prediction.id, provider: "replicate" };
-        return;
-      } catch (e) {
-        console.warn(
-          "[ugc] replicate flux-1.1-pro-ultra submit failed, falling back to FAL flux-pro:",
-          e instanceof Error ? e.message : e
-        );
-      }
       endpoint = FAL.actor;
+      // When a preset Soul was requested but couldn't be rendered live, keep
+      // the character recognizable by seeding the flux-pro prompt with the
+      // preset's description.
+      const presetSeed = state.inputs.soulId ? getPresetSoul(state.inputs.soulId)?.promptSeed : undefined;
+      const actorPrompt = presetSeed
+        ? `${buildActorPrompt(ctx)} The subject specifically is: ${presetSeed}.`
+        : buildActorPrompt(ctx);
       input = {
         prompt: actorPrompt,
         aspect_ratio: "9:16",
@@ -409,6 +372,7 @@ async function submitStage(
     }
     case "composite": {
       if (!state.artifacts.actorImageUrl) throw new Error("composite stage: missing actorImageUrl");
+      endpoint = FAL.composite;
       // On the first submission, compositeAttempts is undefined → seed to 1.
       // The advance loop bumps it to 2 before resubmitting on retry.
       if (state.compositeAttempts === undefined) state.compositeAttempts = 1;
@@ -416,29 +380,6 @@ async function submitStage(
       const prompt = isRetry
         ? buildCompositeRetryPrompt(ctx, opts.compositeRetryReasons || [])
         : buildCompositePrompt(ctx);
-      // Phase 9 primary: Replicate google/nano-banana (Gemini 2.5 Flash Image).
-      // FAL nano-banana stays as fallback.
-      try {
-        const prediction = await (replicate().predictions.create as (args: {
-          model: `${string}/${string}`;
-          input: Record<string, unknown>;
-        }) => Promise<{ id: string }>)({
-          model: REPLICATE_COMPOSITE_PRIMARY,
-          input: {
-            prompt,
-            image_input: [state.artifacts.actorImageUrl, state.inputs.productImageUrl],
-            output_format: "jpg",
-          },
-        });
-        state.pending = { endpoint: REPLICATE_COMPOSITE_PRIMARY, jobId: prediction.id, provider: "replicate" };
-        return;
-      } catch (e) {
-        console.warn(
-          "[ugc] replicate google/nano-banana composite submit failed, falling back to FAL:",
-          e instanceof Error ? e.message : e
-        );
-      }
-      endpoint = FAL.composite;
       input = {
         prompt,
         image_urls: [state.artifacts.actorImageUrl, state.inputs.productImageUrl],
@@ -485,72 +426,48 @@ async function submitStage(
       break;
     }
     case "tts": {
-      const voiceId = pickVoiceId(archetype, state.inputs.language || "en");
-      // Phase 9 chain: direct ElevenLabs (eleven_v3) → Replicate xtts-v2 → FAL.
-      // The first two run on working keys; FAL stays only as a last resort for
-      // when FAL_KEY gets rotated.
-      try {
-        const directUrl = await synthElevenLabsDirect({
-          text: state.inputs.script,
-          voiceId,
-        });
-        if (directUrl) {
-          state.artifacts.audioUrl = directUrl;
-          // Short-circuit straight to lipsync — no async job to poll.
-          state.stage = "lipsync";
-          state.pending = undefined;
-          await submitStage(state, {});
-          return;
-        }
-      } catch (e) {
-        console.warn(
-          "[ugc] direct ElevenLabs TTS failed, falling back to Replicate xtts-v2:",
-          e instanceof Error ? e.message : e
-        );
-      }
-      try {
-        const prediction = await (replicate().predictions.create as (args: {
-          model: `${string}/${string}`;
-          input: Record<string, unknown>;
-        }) => Promise<{ id: string }>)({
-          model: REPLICATE_TTS_FALLBACK,
-          input: {
-            text: state.inputs.script,
-            language: state.inputs.language === "he" ? "he" : "en",
-          },
-        });
-        state.pending = { endpoint: REPLICATE_TTS_FALLBACK, jobId: prediction.id, provider: "replicate" };
-        return;
-      } catch (e) {
-        console.warn(
-          "[ugc] replicate xtts-v2 submit failed, falling back to FAL eleven-v3:",
-          e instanceof Error ? e.message : e
-        );
-      }
-      // Last resort: FAL eleven-v3 (only works if FAL_KEY is rotated).
+      const lang = state.inputs.language || "en";
+      const voiceId = pickVoiceId(archetype, lang);
+      // Tune voice_settings per archetype + language (Hebrew gets Israeli-market
+      // cadence). Sanitize the script so Hebrew reads don't code-switch into an
+      // English accent and so em-dashes don't leak into the prosody.
+      const vs = buildVoiceSettings(archetype, lang);
+      const ttsText = sanitizeScriptForTts(state.inputs.script, lang);
+      // eleven-v3 takes a nested voice_settings object; turbo-v2.5 takes the
+      // same fields flat. We submit v3 first and fall back to turbo-v2.5 if
+      // v3 rejects (4xx, unsupported voice, account not enabled, etc.).
       try {
         const v3Input = {
-          text: state.inputs.script,
+          text: ttsText,
           voice: voiceId,
-          voice_settings: ELEVENLABS_DIRECT_VOICE_DEFAULTS,
+          // eleven-v3 takes a language_code hint to lock pronunciation.
+          language_code: lang,
+          voice_settings: {
+            stability: vs.stability,
+            similarity_boost: vs.similarity_boost,
+            style: vs.style,
+            use_speaker_boost: vs.use_speaker_boost,
+            speed: vs.speed,
+          },
         };
         const { request_id } = await falLib.submit(FAL.tts, v3Input);
-        state.pending = { endpoint: FAL.tts, jobId: request_id, provider: "fal" };
+        state.pending = { endpoint: FAL.tts, jobId: request_id };
         return;
       } catch (e) {
         console.warn(
-          "[ugc] FAL eleven-v3 submit failed, last resort FAL turbo-v2.5:",
+          "[ugc] elevenlabs v3 submit failed, falling back to turbo-v2.5:",
           e instanceof Error ? e.message : e
         );
       }
       endpoint = FAL.ttsFallback;
       input = {
-        text: state.inputs.script,
+        text: ttsText,
         voice: voiceId,
-        stability: 0.5,
-        similarity_boost: 0.75,
-        style: 0.4,
-        speed: 1.0,
+        language_code: lang,
+        stability: vs.stability,
+        similarity_boost: vs.similarity_boost,
+        style: vs.style,
+        speed: vs.speed,
       };
       break;
     }
@@ -577,14 +494,11 @@ async function submitStage(
  * walk forward through the fallback chain. The poll-side fallback is
  * handled in advanceUgc.
  */
-async function submitLipsyncTier(state: UgcState, tier: 1 | 2): Promise<void> {
+async function submitLipsyncTier(state: UgcState, tier: 1 | 2 | 3): Promise<void> {
   const video = state.artifacts.rawVideoUrl;
   const audio = state.artifacts.audioUrl;
   if (!video || !audio) throw new Error("lipsync stage: missing video or audio");
 
-  // Phase 9: FAL lipsync is dropped entirely (FAL_KEY revoked). Chain is now
-  // Replicate sync/lipsync-2 (tier 1) → Replicate cjwbw/wav2lip (tier 2).
-  // The historic tier 3 is retired; we keep the type to avoid client churn.
   if (tier === 1) {
     try {
       const prediction = await (replicate().predictions.create as (args: {
@@ -592,21 +506,40 @@ async function submitLipsyncTier(state: UgcState, tier: 1 | 2): Promise<void> {
         input: Record<string, unknown>;
       }) => Promise<{ id: string }>)({
         model: REPLICATE_LIPSYNC_PRIMARY,
-        input: { video, audio, sync_mode: "cut_off" },
+        input: { video, audio, sync_mode: "cut_off", temperature: LIPSYNC2_TEMPERATURE },
       });
       state.pending = { endpoint: REPLICATE_LIPSYNC_PRIMARY, jobId: prediction.id, provider: "replicate" };
       state.lipsyncTier = 1;
       return;
     } catch (e) {
       console.warn(
-        "[ugc] replicate sync/lipsync-2 submit failed, falling back to wav2lip:",
+        "[ugc] replicate sync/lipsync-2 submit failed, falling back to fal sync-lipsync v2:",
         e instanceof Error ? e.message : e
       );
       return submitLipsyncTier(state, 2);
     }
   }
 
-  // tier 2 (was 3) — wav2lip last resort. Takes { face, audio }.
+  if (tier === 2) {
+    try {
+      const { request_id } = await falLib.submit(FAL.lipsync, {
+        video_url: video,
+        audio_url: audio,
+        sync_mode: "cut_off",
+      });
+      state.pending = { endpoint: FAL.lipsync, jobId: request_id, provider: "fal" };
+      state.lipsyncTier = 2;
+      return;
+    } catch (e) {
+      console.warn(
+        "[ugc] fal sync-lipsync v2 submit failed, falling back to replicate cjwbw/wav2lip:",
+        e instanceof Error ? e.message : e
+      );
+      return submitLipsyncTier(state, 3);
+    }
+  }
+
+  // tier 3 — last resort. wav2lip takes { face, audio }.
   const prediction = await (replicate().predictions.create as (args: {
     model: `${string}/${string}`;
     input: Record<string, unknown>;
@@ -615,7 +548,7 @@ async function submitLipsyncTier(state: UgcState, tier: 1 | 2): Promise<void> {
     input: { face: video, audio },
   });
   state.pending = { endpoint: REPLICATE_LIPSYNC_LASTRESORT, jobId: prediction.id, provider: "replicate" };
-  state.lipsyncTier = 2;
+  state.lipsyncTier = 3;
 }
 
 interface PolledJob {
@@ -633,40 +566,47 @@ async function pollReplicateJob(jobId: string): Promise<PolledJob> {
   if (s === "succeeded") mapped = "succeeded";
   else if (s === "failed" || s === "canceled") mapped = "failed";
 
-  // Replicate output can be: string URL, string[] of URLs, or an object with
-  // video/url/audio fields depending on the model. We coerce all of them into
-  // the right slot. xtts-v2 returns a single mp3 URL string for the audio.
-  let firstUrl: string | undefined;
+  let videoUrl: string | undefined;
   if (mapped === "succeeded") {
     const out = prediction.output as unknown;
-    if (typeof out === "string") firstUrl = out;
-    else if (Array.isArray(out) && typeof out[0] === "string") firstUrl = out[0];
+    if (typeof out === "string") videoUrl = out;
+    else if (Array.isArray(out) && typeof out[0] === "string") videoUrl = out[0];
     else if (out && typeof out === "object") {
       const obj = out as Record<string, unknown>;
-      if (typeof obj.video === "string") firstUrl = obj.video;
-      else if (typeof obj.audio === "string") firstUrl = obj.audio as string;
-      else if (typeof obj.url === "string") firstUrl = obj.url;
-      else if (Array.isArray(obj.video) && typeof obj.video[0] === "string") firstUrl = obj.video[0] as string;
+      if (typeof obj.video === "string") videoUrl = obj.video;
+      else if (typeof obj.url === "string") videoUrl = obj.url;
+      else if (Array.isArray(obj.video) && typeof obj.video[0] === "string") videoUrl = obj.video[0] as string;
     }
   }
-  const isAudio = typeof firstUrl === "string" && /\.(mp3|wav|m4a|ogg)(\?|$)/i.test(firstUrl);
-  const isImage = typeof firstUrl === "string" && /\.(jpe?g|png|webp)(\?|$)/i.test(firstUrl);
 
   return {
     status: mapped,
-    videoUrl: !isAudio && !isImage ? firstUrl : undefined,
-    audioUrl: isAudio ? firstUrl : undefined,
-    imageUrl: isImage ? firstUrl : undefined,
+    videoUrl,
     error: prediction.error ? String(prediction.error) : undefined,
   };
 }
 
 /** Convenience: derive UgcInputs from autopilot's analysis + product + script. */
 export function planUgcInputs(args: {
-  analysis: { hook: string; style: UgcInputs["style"]; body_themes: string[] };
+  analysis: {
+    hook: string;
+    style: UgcInputs["style"];
+    body_themes: string[];
+    /** Optional hints from the LLM analysis. */
+    voiceArchetype?: string;
+    demographic?: string;
+    setting?: string;
+  };
   product: { title: string; description?: string; imageUrl?: string };
   script: string;
   language?: "en" | "he";
+  /** Optional Soul ID + virality gate, forwarded straight through. */
+  soulId?: string;
+  viralityGate?: boolean;
+  /** Caller overrides win over analysis-derived hints. */
+  demographic?: string;
+  setting?: string;
+  voiceArchetype?: string;
 }): UgcInputs | null {
   if (!args.product.imageUrl) return null;
   return {
@@ -677,5 +617,10 @@ export function planUgcInputs(args: {
     hook: args.analysis.hook,
     style: args.analysis.style,
     language: args.language || "en",
+    voiceArchetype: args.voiceArchetype ?? args.analysis.voiceArchetype,
+    demographic: args.demographic ?? args.analysis.demographic,
+    setting: args.setting ?? args.analysis.setting,
+    soulId: args.soulId,
+    viralityGate: args.viralityGate,
   };
 }
