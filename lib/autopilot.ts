@@ -48,6 +48,20 @@ export interface AutopilotResult {
   imageJobIds: string[]; // sales static images (Ideogram v2)
   thumbnailUrl?: string;
   dailyBudget: number;
+  // Source-of-truth surfacing — what we actually saw on the competitor's side,
+  // so the user can compare side-by-side with what we generate.
+  winningAdVideoUrl?: string;
+  winningAdDurationSec?: number;
+  storyboard?: {
+    sceneDescription: string;
+    characterDescription: string;
+    shotList: string;
+    cameraMotion: string;
+    productType: string;
+    hasPerson: boolean;
+    approxDurationSec: number;
+    frameUrls: string[];
+  };
 }
 
 export interface ResolvedCompetitor {
@@ -408,6 +422,29 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
     winnerProductType: storyboard.productType,
   });
 
+  // Probe the winner's real video duration via FAL ffmpeg so we route + clamp
+  // off ground truth, not just the LLM's storyboard estimate.
+  const winnerVideoUrl =
+    winner.snapshot?.videos?.[0]?.videoHdUrl ||
+    winner.snapshot?.videos?.[0]?.videoSdUrl ||
+    "";
+  if (winnerVideoUrl && storyboard.approxDurationSec === 0) {
+    try {
+      const probed = await getVideoDurationSec(winnerVideoUrl);
+      if (probed && probed > 0) storyboard.approxDurationSec = Math.round(probed);
+    } catch {
+      // ignore — fall back to LLM estimate (likely 0)
+    }
+  } else if (winnerVideoUrl) {
+    // Overwrite LLM estimate with truth when available.
+    try {
+      const probed = await getVideoDurationSec(winnerVideoUrl);
+      if (probed && probed > 0) storyboard.approxDurationSec = Math.round(probed);
+    } catch {
+      // keep LLM estimate
+    }
+  }
+
   const scriptOut = await writeAdScript({
     productTitle: product.title,
     productDescription: product.description,
@@ -425,6 +462,12 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
     style: analysis.style,
     productTitle: product.title,
   });
+  // Duration-aware routing. UGC + showcase are single-clip pipelines capped
+  // at ~10s. When the winner is longer than that, the only mode that can
+  // honor the duration faithfully (via startVideoSequence stitching) is
+  // "video". So if the user didn't explicitly pick a mode AND the winner is
+  // longer than the single-clip ceiling, we promote to video.
+  const longWinner = storyboard.approxDurationSec > 10 || (input.videoDuration ?? 0) > 10;
   const mode: AutopilotMode =
     requestedMode === "ugc"
       ? "ugc"
@@ -432,16 +475,21 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
         ? "video"
         : requestedMode === "showcase"
           ? "showcase"
-          : // Storyboard says the winner has a model wearing/holding the product
-            // → UGC mode (actor + product fusion). This is the Ice Cartel case:
-            // every frame has a person, showcase-on-marble would be wrong.
-            storyboard.hasPerson && product.imageUrl
-            ? "ugc"
-            : (analysis.style === "ugc_review" || analysis.style === "yapping") && product.imageUrl
+          : longWinner && product.imageUrl
+            ? // Long competitor ads → stitched i2v video. Single-clip UGC
+              // would force a 10s cut and lose the multi-shot cadence.
+              "video"
+            : // Storyboard says the winner has a model wearing/holding the product
+              // → UGC mode (actor + product fusion). This is the Ice Cartel case
+              // for short ads: every frame has a person, showcase-on-marble
+              // would be wrong.
+              storyboard.hasPerson && product.imageUrl
               ? "ugc"
-              : wantsShowcase
-                ? "showcase"
-                : "video";
+              : (analysis.style === "ugc_review" || analysis.style === "yapping") && product.imageUrl
+                ? "ugc"
+                : wantsShowcase
+                  ? "showcase"
+                  : "video";
 
   // Video pipeline (skipped in UGC mode)
   let videoJobId: string | undefined;
@@ -651,5 +699,21 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
     imageJobIds,
     thumbnailUrl: analysis.thumbnailUrl,
     dailyBudget,
+    // Source-of-truth surface for the UI side-by-side comparison.
+    winningAdVideoUrl:
+      winner.snapshot?.videos?.[0]?.videoHdUrl ||
+      winner.snapshot?.videos?.[0]?.videoSdUrl ||
+      undefined,
+    winningAdDurationSec: storyboard.approxDurationSec || undefined,
+    storyboard: {
+      sceneDescription: storyboard.sceneDescription,
+      characterDescription: storyboard.characterDescription,
+      shotList: storyboard.shotList,
+      cameraMotion: storyboard.cameraMotion,
+      productType: storyboard.productType,
+      hasPerson: storyboard.hasPerson,
+      approxDurationSec: storyboard.approxDurationSec,
+      frameUrls: storyboard.frameUrls,
+    },
   };
 }

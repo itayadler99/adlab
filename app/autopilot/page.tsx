@@ -44,6 +44,18 @@ interface AutopilotResult {
   imageJobIds?: string[];
   thumbnailUrl?: string;
   dailyBudget: number;
+  winningAdVideoUrl?: string;
+  winningAdDurationSec?: number;
+  storyboard?: {
+    sceneDescription: string;
+    characterDescription: string;
+    shotList: string;
+    cameraMotion: string;
+    productType: string;
+    hasPerson: boolean;
+    approxDurationSec: number;
+    frameUrls: string[];
+  };
 }
 
 interface ShowcaseInputsClient {
@@ -1033,6 +1045,105 @@ export default function AutopilotPage() {
                 </div>
               )}
             </section>
+
+            {/* Side-by-side: winner ad ↔ generated ad. The whole point of the
+                tool is to clone a winning competitor — the user needs to see
+                the source of inspiration AND the output in one view to judge
+                whether the AI actually learned from the winner. */}
+            {(result.winningAdVideoUrl || (result.storyboard?.frameUrls?.length ?? 0) > 0) && (
+              <section className="bg-white/5 border border-white/10 rounded-xl p-5 space-y-4">
+                <h2 className="text-xs font-semibold text-white/60 uppercase tracking-wider">
+                  השוואה — מקור ההשראה מול מה שיצרנו
+                </h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Winner */}
+                  <div className="space-y-2">
+                    <div className="text-xs text-white/50 flex items-center justify-between">
+                      <span>הסרטון של {result.competitorPageName || "המתחרה"}</span>
+                      {result.winningAdDurationSec ? (
+                        <span className="text-violet-300">{result.winningAdDurationSec}s</span>
+                      ) : null}
+                    </div>
+                    {result.winningAdVideoUrl ? (
+                      <video
+                        src={result.winningAdVideoUrl}
+                        controls
+                        playsInline
+                        className="w-full aspect-[9/16] bg-black rounded-lg object-contain"
+                      />
+                    ) : result.thumbnailUrl ? (
+                      <img
+                        src={result.thumbnailUrl}
+                        alt="winner thumbnail"
+                        className="w-full aspect-[9/16] bg-black rounded-lg object-contain"
+                      />
+                    ) : null}
+                    {(result.storyboard?.frameUrls?.length ?? 0) > 0 && (
+                      <div className="grid grid-cols-3 gap-1.5">
+                        {result.storyboard!.frameUrls.map((u, i) => (
+                          <img key={i} src={u} alt={`frame ${i}`} className="w-full aspect-square object-cover rounded" />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {/* Generated */}
+                  <div className="space-y-2">
+                    <div className="text-xs text-white/50 flex items-center justify-between">
+                      <span>הסרטון שלנו</span>
+                      <span className="text-emerald-300">{videoUrl ? "מוכן" : "בעבודה..."}</span>
+                    </div>
+                    {videoUrl ? (
+                      <video
+                        src={videoUrl}
+                        controls
+                        playsInline
+                        className="w-full aspect-[9/16] bg-black rounded-lg object-contain"
+                      />
+                    ) : (
+                      <div className="w-full aspect-[9/16] bg-black/40 rounded-lg flex items-center justify-center text-white/40 text-xs">
+                        ממתין לסרטון מהפייפליין
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Storyboard breakdown — what the AI extracted from the winner */}
+                {result.storyboard && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm pt-2 border-t border-white/10">
+                    {result.storyboard.sceneDescription && (
+                      <div>
+                        <div className="text-white/40 text-xs">סצנה / תאורה</div>
+                        <div className="text-white/85 leading-relaxed">{result.storyboard.sceneDescription}</div>
+                      </div>
+                    )}
+                    {result.storyboard.characterDescription && (
+                      <div>
+                        <div className="text-white/40 text-xs">דמות</div>
+                        <div className="text-white/85 leading-relaxed">{result.storyboard.characterDescription}</div>
+                      </div>
+                    )}
+                    {result.storyboard.productType && (
+                      <div>
+                        <div className="text-white/40 text-xs">סוג המוצר שזיהינו</div>
+                        <div className="text-white/85">{result.storyboard.productType}</div>
+                      </div>
+                    )}
+                    {result.storyboard.cameraMotion && (
+                      <div>
+                        <div className="text-white/40 text-xs">תנועת מצלמה</div>
+                        <div className="text-white/85">{result.storyboard.cameraMotion}</div>
+                      </div>
+                    )}
+                    {result.storyboard.shotList && (
+                      <div className="md:col-span-2">
+                        <div className="text-white/40 text-xs">שוט-ליסט שזיהינו</div>
+                        <pre className="text-white/85 text-xs whitespace-pre-wrap font-sans leading-relaxed">{result.storyboard.shotList}</pre>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </section>
+            )}
 
             {/* Product */}
             <section className="bg-white/5 border border-white/10 rounded-xl p-5 space-y-2">
