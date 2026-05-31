@@ -3,6 +3,7 @@ import { applyRealism, burnCaptions, addMusicBed, type PostProcessLevel, type Ca
 import { buildCaptionsForVideo } from "@/lib/captions";
 import { getBrandKit } from "@/lib/brand-kit";
 import { pickMusicTrack, pickVertical, type Vertical } from "@/lib/music";
+import { isPublicHttpsUrl } from "@/lib/url-guard";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -22,8 +23,8 @@ interface Body {
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as Body;
-    if (!body.url || !/^https?:\/\//i.test(body.url)) {
-      return NextResponse.json({ error: "valid http(s) url required" }, { status: 400 });
+    if (!body.url || !isPublicHttpsUrl(body.url)) {
+      return NextResponse.json({ error: "valid https public url required" }, { status: 400 });
     }
     const brandKit =
       body.brandKit !== false && body.storeId ? await getBrandKit(body.storeId) : undefined;

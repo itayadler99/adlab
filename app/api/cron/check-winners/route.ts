@@ -15,7 +15,7 @@ export const maxDuration = 300;
 
 function authorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
-  if (!secret) return true; // no secret configured → open (dev)
+  if (!secret) return false; // fail closed: misconfig should not expose cron
   const header = req.headers.get("authorization");
   const query = req.nextUrl.searchParams.get("secret");
   return header === `Bearer ${secret}` || query === secret;

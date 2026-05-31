@@ -19,7 +19,7 @@ async function getAdsetInsightRow(adsetId: string, since: string, until: string)
 
 function authorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
-  if (!secret) return true;
+  if (!secret) return false; // fail closed: misconfig should not expose cron
   const header = req.headers.get("authorization");
   const query = req.nextUrl.searchParams.get("secret");
   return header === `Bearer ${secret}` || query === secret;

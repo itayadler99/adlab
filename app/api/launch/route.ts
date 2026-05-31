@@ -12,6 +12,7 @@ import { getStore } from "@/lib/stores";
 import { sanitizeHebrew } from "@/lib/copy";
 import { upsertVariantPerf } from "@/lib/performance-bias";
 import { saveCampaign } from "@/lib/db";
+import { isPublicHttpsUrl } from "@/lib/url-guard";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -41,6 +42,7 @@ export async function POST(req: Request) {
     if (!link) return NextResponse.json({ error: "link (or a configured store) required" }, { status: 400 });
     if (!b.name) return NextResponse.json({ error: "name required" }, { status: 400 });
     if (!b.video_url) return NextResponse.json({ error: "video_url required" }, { status: 400 });
+    if (!isPublicHttpsUrl(b.video_url)) return NextResponse.json({ error: "video_url must be https and public" }, { status: 400 });
     const dailyBudget = Number(b.daily_budget);
     if (!Number.isFinite(dailyBudget) || dailyBudget <= 0) {
       return NextResponse.json({ error: "daily_budget must be a positive number" }, { status: 400 });

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isPublicHttpsUrl } from "@/lib/url-guard";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -15,6 +16,7 @@ export async function POST(req: Request) {
       wordTimestamps?: boolean;
     };
     if (!url) return NextResponse.json({ error: "url required" }, { status: 400 });
+    if (!isPublicHttpsUrl(url)) return NextResponse.json({ error: "url must be https and public" }, { status: 400 });
 
     const key = process.env.OPENAI_API_KEY;
     if (!key) return NextResponse.json({ error: "OPENAI_API_KEY not set on server" }, { status: 500 });
