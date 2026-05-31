@@ -200,6 +200,8 @@ export interface WinnerAnalysis {
   character?: string;
   /** Voice archetype hint (e.g. "rapper_male", "young_woman_excited"). */
   voiceArchetype?: string;
+  /** Short description of the winner's visual scene — surface, light, mood, framing. Drives showcase hero scene. */
+  visualScene?: string;
   thumbnailUrl?: string;
 }
 
@@ -209,10 +211,17 @@ export async function analyzeWinner(ad: ApifyAd): Promise<WinnerAnalysis> {
   const thumbnailUrl = ad.snapshot?.videos?.[0]?.thumbnailUrl || ad.snapshot?.images?.[0]?.originalImageUrl;
 
   let visualDescription = "";
+  let visualScene = "";
   if (thumbnailUrl) {
     visualDescription = await analyzeImage(
       thumbnailUrl,
       "Describe this ad thumbnail in 1-2 sentences. Focus on: who is in it, what setting, what visual style (UGC selfie, polished demo, lifestyle, etc.)."
+    );
+    // Extract a concrete scene direction we can paste into a hero compositor.
+    // Phrase as a short scene description, not a sentence about the ad.
+    visualScene = await analyzeImage(
+      thumbnailUrl,
+      "Describe the visual scene of this ad in ONE short phrase (max 18 words) that another image-gen model can replicate. Focus on: surface/background, lighting style, color palette, framing, mood. Example outputs: 'gritty neon-lit street at night, low angle, harsh shadows, red and teal palette' or 'sunlit marble countertop, soft window light, warm cream tones, top-down framing'. Do NOT mention the product itself, brand names, text, or people."
     );
   }
 
@@ -251,6 +260,7 @@ Visual: ${visualDescription || "(unknown)"}`;
       hook: title || body.slice(0, 60),
       style: "ugc_review",
       body_themes: [],
+      visualScene: visualScene || undefined,
       thumbnailUrl,
     };
   }
@@ -262,7 +272,7 @@ Visual: ${visualDescription || "(unknown)"}`;
     character?: string;
     voiceArchetype?: string;
   };
-  return { ...parsed, thumbnailUrl };
+  return { ...parsed, visualScene: visualScene || undefined, thumbnailUrl };
 }
 
 export async function pickProduct(themes: string[]): Promise<{ id?: string; title: string; description: string; link: string; imageUrl?: string }> {
@@ -442,9 +452,15 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
     const productAnchor = hasProductImg
       ? `\n\nThe single product visible in the video is the EXACT item shown in the reference image: ${product.title}. Do not invent or substitute jewelry. Hold the camera close enough that the product reads clearly.`
       : "";
+    // Inject the winner ad's visual scene so the generation actually mirrors the
+    // competitor's look (lighting, backdrop, mood) instead of defaulting to a
+    // generic product-on-white shot. Empty when winner has no thumbnail.
+    const sceneAnchor = analysis.visualScene
+      ? `\n\nReplicate this visual scene from the reference creative: ${analysis.visualScene}. Match the lighting style, palette, and framing — but keep the product the exact item above.`
+      : "";
     console.log("[autopilot] starting video sequence: model=", chosenModel, "duration=", chosenDuration, "i2v=", hasProductImg);
     const sequence = await startVideoSequence(
-      scriptOut.visual_prompt + productAnchor,
+      scriptOut.visual_prompt + sceneAnchor + productAnchor,
       chosenModel,
       chosenDuration,
       {
@@ -523,6 +539,9 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
           productTitle: product.title,
           productImageUrl: product.imageUrl,
           hook: analysis.hook,
+          // Borrow the winner's visual scene so the hero replicates competitor look,
+          // not the generic studio-white default.
+          scene: analysis.visualScene,
           // Seedance 1 Pro native max is 10s; longer ads get stitched downstream.
           durationSec: Math.min(10, Math.max(5, input.videoDuration ?? 10)),
         }
