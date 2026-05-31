@@ -1,4 +1,6 @@
 // Klaviyo REST v2024-10-15 wrapper
+import { sanitizeHebrew } from "./copy";
+
 const BASE = "https://a.klaviyo.com/api";
 const REVISION = "2024-10-15";
 
@@ -15,6 +17,37 @@ function headers() {
     accept: "application/json",
     revision: REVISION,
   };
+}
+
+export interface KlaviyoList {
+  id: string;
+  name: string;
+}
+
+/** List all Klaviyo lists (audience management for campaign targeting). */
+export async function getLists(): Promise<KlaviyoList[]> {
+  const res = await fetch(`${BASE}/lists/`, { headers: headers() });
+  const json = await res.json();
+  if (!res.ok) throw new Error(JSON.stringify(json));
+  return (json.data || []).map((d: any) => ({ id: d.id, name: d.attributes?.name }));
+}
+
+export async function createList(name: string): Promise<KlaviyoList> {
+  const res = await fetch(`${BASE}/lists/`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ data: { type: "list", attributes: { name } } }),
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error(JSON.stringify(json));
+  return { id: json.data.id, name: json.data.attributes?.name };
+}
+
+/** Return an existing list by (case-insensitive) name, creating it if absent. */
+export async function getOrCreateList(name: string): Promise<KlaviyoList> {
+  const lists = await getLists();
+  const found = lists.find((l) => l.name?.toLowerCase() === name.toLowerCase());
+  return found ?? (await createList(name));
 }
 
 export interface KlaviyoTemplate {
@@ -59,22 +92,29 @@ export function renderAdEmail(opts: {
   thumbnailUrl?: string;
   ctaText?: string;
   ctaUrl: string;
+  language?: "he" | "en";
 }): string {
+  const lang = opts.language || "he";
+  const rtl = lang === "he";
+  // Hebrew copy gets the house-style sanitize (dash → comma) before escaping.
+  const clean = (s: string) => (rtl ? sanitizeHebrew(s) : s);
+  const dir = rtl ? "rtl" : "ltr";
+  const textAlign = rtl ? "right" : "left";
   const thumb = opts.thumbnailUrl || "";
   const media = opts.videoUrl
     ? `<a href="${opts.videoUrl}" style="display:block"><img src="${thumb}" alt="" style="width:100%;max-width:600px;display:block;border:0" /></a>`
     : thumb
     ? `<img src="${thumb}" alt="" style="width:100%;max-width:600px;display:block;border:0" />`
     : "";
-  const cta = opts.ctaText || "Shop Now";
+  const cta = clean(opts.ctaText || (rtl ? "לרכישה" : "Shop Now"));
   return `<!doctype html>
-<html><body style="margin:0;padding:0;background:#f5f5f5;font-family:Helvetica,Arial,sans-serif">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+<html lang="${lang}" dir="${dir}"><body style="margin:0;padding:0;background:#f5f5f5;font-family:Helvetica,Arial,sans-serif" dir="${dir}">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" dir="${dir}">
     <tr><td align="center" style="padding:24px">
       <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:12px;overflow:hidden">
-        <tr><td style="padding:32px 32px 16px 32px">
-          <h1 style="margin:0 0 16px 0;font-size:28px;line-height:1.2;color:#111">${escapeHtml(opts.headline)}</h1>
-          <p style="margin:0 0 24px 0;font-size:16px;line-height:1.5;color:#444">${escapeHtml(opts.body)}</p>
+        <tr><td style="padding:32px 32px 16px 32px;text-align:${textAlign}">
+          <h1 style="margin:0 0 16px 0;font-size:28px;line-height:1.2;color:#111">${escapeHtml(clean(opts.headline))}</h1>
+          <p style="margin:0 0 24px 0;font-size:16px;line-height:1.5;color:#444">${escapeHtml(clean(opts.body))}</p>
         </td></tr>
         ${media ? `<tr><td style="padding:0 32px">${media}</td></tr>` : ""}
         <tr><td align="center" style="padding:24px 32px 32px 32px">

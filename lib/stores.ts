@@ -45,6 +45,14 @@ export const STORES: StoreConfig[] = [
     shopifyDomain: envOr("SHOPIFY_DOMAIN_TREYZER"),
     defaultLink: envOr("LINK_TREYZER"),
   },
+  {
+    id: "montier_ww",
+    name: "Montier WW",
+    adAccountId: envOr("META_AD_ACCOUNT_MONTIER_WW"),
+    pageId: envOr("META_PAGE_MONTIER_WW", "796977063501732"),
+    shopifyDomain: envOr("SHOPIFY_DOMAIN_MONTIER_WW", "hkg1nb-hf.myshopify.com"),
+    defaultLink: envOr("LINK_MONTIER_WW", "https://montierjewelry.com"),
+  },
 ];
 
 export function getStore(id: string): StoreConfig | undefined {

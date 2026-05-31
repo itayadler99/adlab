@@ -366,3 +366,213 @@ What was tested
 - Brand kit logo overlay (8% width, bottom-right 24px) runs as part of the same `filter_complex`.
 - Legacy chain remains the default; existing callers untouched.
 - `npx tsc --noEmit` clean; `npm run build` passes.
+
+---
+
+## Phase M — meta loop (Terminal 3, branch `feat/meta-loop`)
+
+Scope: Meta integration + ROAS feedback loop + cron jobs. Live Meta calls are
+blocked by the env network allowlist (see BLOCKERS.md), so verification here is
+`tsc --noEmit` + `npm run build` + code review, not a live smoke test.
+
+### Step 1 — ROAS read correctness + lifetime/7d/30d windows ✅
+- `lib/meta.ts`: **bug fix** — `getCampaigns()` and `getCampaignInsights()`
+  returned Meta's raw `{ data: [...] }` envelope, but `check-winners`,
+  `campaigns/route.ts`, and the learn loop all treated the result as an array.
+  Net effect: the ROAS winner scan iterated over nothing and could never fire.
+  Both now return arrays.
+- Added `getCampaignInsightsMulti(id)` → `{ lifetime, d7, d30 }` using
+  `date_preset=maximum` / `last_7d` / `last_30d` (Itay's ironclad rule), plus
+  `getAccountCampaignInsights()` (one campaign-level call for the dashboard) and
+  pure helpers `roasOf` / `purchaseCount` / `purchaseValue` / `spendOf`.
+- `lib/performance-bias.ts`: `runLearnCron` now reads lifetime + 7d + 30d per
+  ad and stores the lifetime aggregate (30d/7d fallback for young ads). Kept
+  the existing `variant_perf` columns to stay schema-safe.
+- `app/api/campaigns/route.ts`: rewritten to use `getAccountCampaignInsights`
+  (was calling `.map` on a non-array and passing an id[] where a string id
+  was expected).
+- `tsc --noEmit` clean.
+
+### Step 2 — check-winners hardening + kill rule ✅
+- `app/api/cron/check-winners/route.ts`: the scan was dead (iterated the
+  `{data}` envelope as if it were an array). Rewritten to read lifetime + 7d +
+  30d per campaign, decide ROAS on lifetime (30d/7d fallback), and webhook-alert
+  winners with ROAS > 3.
+- Implements the **kill rule**: 0 purchases lifetime + spend > ₪200 (account
+  currency). Alert-only by default; `META_AUTO_KILL=1` also pauses via
+  `setCampaignStatus`. Only acts on ACTIVE campaigns. Thresholds overridable
+  (`WINNER_ROAS_THRESHOLD`, `KILL_SPEND_THRESHOLD`).
+- Auth accepts Vercel-native `Authorization: Bearer <CRON_SECRET>` and `?secret=`.
+- `lib/meta.ts`: added `setCampaignStatus(id, status)`.
+
+### Step 3 — A/B launcher → PAUSED ✅
+- `app/api/abtest/route.ts`: campaign/adset/ad were created ACTIVE — violated
+  the ironclad "all campaigns PAUSED" rule. Now PAUSED (owner activates). When
+  `pixel_id` is supplied the adsets optimize for PURCHASE; bid strategy stays
+  `LOWEST_COST_WITHOUT_CAP`.
+- `app/api/cron/check-ab-winners/route.ts`: added a zero-spend guard so a test
+  isn't decided (premature tie) before the owner activates and spend lands.
+
+### Step 4 — headline variants ✅
+- New `POST /api/launch/headlines`: 3 Hebrew variants (benefit/urgency/curiosity)
+  via `writeHeadlines`, with a defensive sanitize (em/en dash → comma) and a
+  specific-date warning flag.
+- `app/api/launch/route.ts`: auto-generates 3 headlines when no message is
+  supplied, uses the first as primary text, returns all 3.
+
+### Step 5 — multi-store + verification ✅
+- `lib/stores.ts`: added `montier_ww` (Montier WW). All 5 stores
+  (Montier US / Sneakers / Studio / Treyzer / Montier WW) now resolve through
+  `/api/stores` (the dropdown feed; UI itself is Terminal 4's `page.tsx`).
+  Shows `configured:false` until `META_AD_ACCOUNT_MONTIER_WW` is set.
+- `vercel.json`: scheduled `/api/cron/learn` daily 06:00 UTC (was unscheduled).
+
+### Verification
+- `npx tsc --noEmit` clean across all steps.
+- `npm run build` passes; all new routes registered
+  (`/api/launch/headlines`, hardened `/api/cron/check-winners`, etc.).
+- Live Meta verification NOT run — env network allowlist blocks
+  `graph.facebook.com` (see BLOCKERS.md). Gate is typecheck + build + review.
+
+### Meta-rule compliance recap
+- Bid strategy: `LOWEST_COST_WITHOUT_CAP` everywhere (never Bid Cap) — unchanged
+  default in `createAdset`, confirmed in the A/B path.
+- All campaigns created PAUSED (launch + A/B).
+- Always read lifetime + 7d + 30d (`date_preset=maximum`/`last_7d`/`last_30d`).
+- Kill rule = 0 purchases lifetime + spend > ₪200, with learning-phase context
+  (daysRunning in the alert) and opt-in auto-pause.
+
+---
+
+## Phase M2 — production hardening (Terminal 3). Found 10 new gaps; building.
+
+Gap list (meta+learn+klaviyo+stores+cron):
+1. Multi-store half-wired — launches always hit the global ad account (meta.ts
+   `adAccount()` ignored per-store config). [Batch B]
+2. No rate-limit/transient retry in metaGet/metaPost. [Batch A ✅]
+3. Video-not-ready before creative creation → creative create can fail. [Batch A ✅]
+4. uploadImageFromUrl returned raw json with no error check. [Batch A ✅]
+5. Winner judgment ignores learning phase (no min-conversions/days gate). [Batch C]
+6. getCampaigns capped at 100, no pagination. [Batch A ✅]
+7. No persisted audit log of ROAS scans / kills. [Batch C — lib/learn.ts]
+8. Klaviyo wrapper thin + email is LTR (wrong for Hebrew). [Batch D]
+9. Hebrew copy sanitize lives only in the launch route, not reused. [Batch D — lib/copy.ts]
+10. check-ab-winners decides on any spend, no min-data gate. [Batch E]
+
+### Batch A — meta.ts robustness ✅
+- `metaFetch()` retry wrapper: exponential backoff (1/2/4s) on HTTP 429/5xx,
+  network blips, and Meta transient/rate-limit error codes (1,2,4,17,32,341,
+  368,613,80000-80004). metaGet/metaPost route through it.
+- `getCampaigns()` now follows `paging.next` (up to 20 pages) and accepts an
+  optional `accountId` for multi-store scans.
+- `waitForVideoReady(videoId)` polls `/{id}?fields=status` until `ready`
+  (fails open after 120s so a slow encode can't hard-block a launch).
+- `uploadImageFromUrl` now throws on fetch/Meta error instead of returning a
+  broken payload. All create/upload fns accept an optional `accountId`.
+- `tsc --noEmit` clean.
+
+### Batch B — multi-store launches + centralized Hebrew copy ✅
+- `app/api/launch/route.ts` + `app/api/abtest/route.ts`: accept `store_id`,
+  resolve via `getStore`, and thread the store's `adAccountId` / `pageId` /
+  `defaultLink` through every Meta create call (campaign/adset/video/creative/
+  ad). Launches now land in the correct store's ad account instead of always
+  the global one. Both still create everything PAUSED.
+- Both launch paths now `waitForVideoReady()` before building the creative.
+- New `lib/copy.ts`: `sanitizeHebrew()` (dash → comma) + `validateHebrew()`
+  (flags specific dates and English-in-Hebrew as warnings). Launch + headlines
+  routes use it; the local sanitize copies were removed.
+- `saveCampaign` now records `store_id` + `ad_account_id`.
+- `tsc --noEmit` clean.
+
+### Batch C — lib/learn.ts scan layer + learning-phase gate + audit log ✅
+- New `lib/learn.ts` (the owned file that didn't exist): `scanCampaigns()`
+  pulls all campaigns, reads lifetime+7d+30d each, and `classify()`s them:
+  winner / promising / kill / learning / watch.
+- **Learning-phase gate**: a high-ROAS campaign still in learning (< minDays OR
+  < minConversions, defaults 4d / 50 conv via LEARNING_MIN_DAYS /
+  LEARNING_MIN_CONVERSIONS) is "promising", NOT a "winner" — no premature
+  judgment. Kill rule still fires regardless (the explicit exception).
+- `check-winners` is now a thin route over `scanCampaigns` + `persistScan`;
+  alerts only on confirmed winners + kills, reports promising separately,
+  supports `?account_id=` to scan a specific store.
+- `persistScan()` writes a best-effort audit row to `roas_scan_log`
+  (new migration `supabase/migrations/v4_roas_scan_log.sql`; degrades when absent).
+- `tsc --noEmit` clean.
+
+### Batch D — Klaviyo RTL Hebrew email + list management ✅
+- `lib/klaviyo.ts`: `renderAdEmail` is now RTL-aware — Hebrew (default) renders
+  `dir="rtl"`, right-aligned, with the house-style sanitize (dash → comma) and a
+  Hebrew default CTA ("לרכישה"). English still renders LTR.
+- Added `getLists()` / `createList()` / `getOrCreateList()` for audience
+  targeting so a template can be tied to a known list id.
+- `app/api/klaviyo/push/route.ts`: accepts `language` + `listName`, returns the
+  resolved list alongside the template.
+- The full campaign create+send flow is intentionally NOT shipped unverified —
+  see BLOCKERS.md (needs a live Klaviyo account to validate the multi-step
+  campaign-message/template-assign/send-job shapes).
+- `tsc --noEmit` clean.
+
+### Batch E — A/B winner min-data gate ✅
+- `app/api/cron/check-ab-winners/route.ts`: no longer decides on any spend.
+  Requires combined spend ≥ AB_MIN_SPEND (default 50) AND at least one arm
+  with ≥ AB_MIN_CONVERSIONS purchases (default 5) before declaring a winner;
+  otherwise the test stays pending with a reason. Now uses the shared
+  roasOf/spendOf/purchaseCount helpers (broader purchase action-type coverage).
+- `npm run build` passes; all 10 meta-loop routes registered.
+
+### Phase M2 status: 10/10 gaps addressed (Batches A-E). Not yet SCOPE COMPLETE —
+remaining production hardening tracked for the next pass (see below).
+
+### Batch F — close the ROAS feedback loop + launch validation ✅
+- `app/api/launch/route.ts`: seeds a `variant_perf` row at launch (meta_ad_id +
+  hook/actor archetype + vertical) so `runLearnCron` can backfill ROAS and
+  `topArchetypes()` can bias future scripts. Previously NOTHING populated
+  variant_perf — the loop was open in production. Best-effort.
+- Guards against launching into the GLOBAL account when a selected store is
+  unconfigured; validates name/video_url/daily_budget; sanitizes explicit
+  Hebrew messages.
+
+### Batch G — unit tests on money-critical helpers ✅
+- `lib/__tests__/meta.test.ts` + `copy.test.ts`: 7 tests over purchase counting
+  (kill rule), ROAS math, and the Hebrew copy rules. Run with
+  `node --experimental-strip-types --test lib/__tests__/*.test.ts`.
+- `tsconfig.json` excludes `lib/__tests__` (the `.ts` import extensions Node's
+  test runner needs would otherwise trip tsc). tsc + build stay green.
+
+### Batch H — consistency polish ✅
+- `check-ab-winners` auth unified (accepts Vercel Bearer + `?secret`).
+- A/B test `started_at` anchored at launch so the comparison window is well
+  defined (min-data gate still prevents premature decisions).
+- tsc + 7/7 tests + build all green.
+
+---
+
+## SCOPE COMPLETE — production ready
+
+Terminal 3 (Meta integration + ROAS feedback loop + cron jobs) is
+production-ready to the limit of what is verifiable in this environment
+(tsc + unit tests + `next build` + review; live Meta calls are network-blocked).
+
+Goal coverage:
+1. ROAS feedback loop — reads lifetime+7d+30d; `topArchetypes` biases scripts;
+   **loop closed** (launch seeds `variant_perf`, learn cron backfills ROAS).
+2. `/api/cron/check-winners` — real scan, ROAS>3 winner alerts, kill rule
+   (0 purchases + spend>₪200), learning-phase gate, audit log, scheduled+authed.
+3. A/B launcher — 1 script → 2 models → 2 PAUSED adsets, 5-day compare with a
+   min-data gate so flukes can't decide.
+4. Headline variants — 3 Itay-style Hebrew variants, wired into launch + a
+   dedicated endpoint, centrally sanitized (`lib/copy.ts`).
+5. Multi-store — 5 stores; launches target the selected store's ad account
+   (with an unconfigured-store guard), surfaced via `/api/stores`.
+
+Meta-rule compliance: `LOWEST_COST_WITHOUT_CAP` everywhere (never Bid Cap),
+all campaigns created PAUSED, always lifetime+7d+30d, kill rule enforced.
+
+Hardening: retry/backoff on all Meta calls, pagination, video-ready polling,
+input validation, per-account targeting, unit tests on the money-critical
+helpers.
+
+Only outstanding items are EXTERNAL (documented in BLOCKERS.md), not code gaps:
+- Live Meta smoke test (network allowlist blocks graph.facebook.com).
+- Full Klaviyo campaign send flow (needs a live Klaviyo account to verify shapes).
+- Env vars + Supabase migrations to apply on deploy (BLOCKERS.md).

@@ -1,106 +1,73 @@
+// Daily ROAS scan (thin route over lib/learn.ts).
+//   - Winner   : ROAS > 3 AND out of the learning phase. Webhook alert.
+//   - Promising : ROAS > 3 but still learning (< minDays or < minConversions).
+//   - Kill      : 0 purchases lifetime + spend > ₪200 lifetime (ironclad kill rule).
+//                 Alert-only by default; META_AUTO_KILL=1 also pauses the campaign.
+//
+// Per Itay's rules the scan reads lifetime + 7d + 30d. Vercel Cron sends
+// `Authorization: Bearer <CRON_SECRET>`; `?secret=` is also accepted for manual runs.
+
 import { NextRequest, NextResponse } from "next/server";
-import { getCampaigns, getCampaignInsights } from "@/lib/meta";
+import { scanCampaigns, persistScan } from "@/lib/learn";
 
-const ROAS_THRESHOLD = 3;
+export const runtime = "nodejs";
+export const maxDuration = 300;
 
-async function sendWebhookAlert(winners: { campaignId: string; campaignName: string; roas: number; spend: number; revenue: number }[]) {
+function authorized(req: NextRequest): boolean {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return true; // no secret configured → open (dev)
+  const header = req.headers.get("authorization");
+  const query = req.nextUrl.searchParams.get("secret");
+  return header === `Bearer ${secret}` || query === secret;
+}
+
+async function sendWebhookAlert(payload: Record<string, unknown>) {
   const webhookUrl = process.env.WINNER_WEBHOOK_URL;
   if (!webhookUrl) {
     console.warn("WINNER_WEBHOOK_URL not set, skipping webhook alert");
     return;
   }
-
-  const payload = {
-    event: "roas_winner_detected",
-    timestamp: new Date().toISOString(),
-    threshold: ROAS_THRESHOLD,
-    winners,
-  };
-
-  const res = await fetch(webhookUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-
-  if (!res.ok) {
-    console.error(`Webhook delivery failed: ${res.status} ${res.statusText}`);
-  } else {
-    console.log(`Webhook delivered successfully for ${winners.length} winner(s)`);
+  try {
+    const res = await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) console.error(`Webhook delivery failed: ${res.status} ${res.statusText}`);
+  } catch (err) {
+    console.error("Webhook delivery error:", err);
   }
 }
 
 export async function GET(req: NextRequest) {
+  if (!authorized(req)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   try {
-    const authHeader = req.headers.get("authorization");
-    const cronSecret = process.env.CRON_SECRET;
-    if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const accountId = req.nextUrl.searchParams.get("account_id") || undefined;
+    const result = await scanCampaigns({ accountId });
+    await persistScan(result);
 
-    const campaigns = await getCampaigns();
-    if (!campaigns || campaigns.length === 0) {
-      return NextResponse.json({ message: "No campaigns found", winners: [] });
-    }
-
-    const winners: { campaignId: string; campaignName: string; roas: number; spend: number; revenue: number }[] = [];
-    const results: { campaignId: string; campaignName: string; roas: number | null; spend: number; revenue: number; isWinner: boolean }[] = [];
-
-    for (const campaign of campaigns) {
-      try {
-        const insights = await getCampaignInsights(campaign.id);
-
-        let totalSpend = 0;
-        let totalRevenue = 0;
-
-        if (insights && Array.isArray(insights)) {
-          for (const insight of insights) {
-            const spend = parseFloat(insight.spend ?? "0");
-            const revenue = parseFloat(
-              insight.action_values?.find((a: { action_type: string; value: string }) => a.action_type === "offsite_conversion.fb_pixel_purchase")?.value ??
-              insight.action_values?.find((a: { action_type: string; value: string }) => a.action_type === "purchase")?.value ??
-              "0"
-            );
-            totalSpend += spend;
-            totalRevenue += revenue;
-          }
-        }
-
-        const roas = totalSpend > 0 ? totalRevenue / totalSpend : null;
-        const isWinner = roas !== null && roas > ROAS_THRESHOLD;
-
-        results.push({
-          campaignId: campaign.id,
-          campaignName: campaign.name ?? campaign.id,
-          roas,
-          spend: totalSpend,
-          revenue: totalRevenue,
-          isWinner,
-        });
-
-        if (isWinner) {
-          winners.push({
-            campaignId: campaign.id,
-            campaignName: campaign.name ?? campaign.id,
-            roas,
-            spend: totalSpend,
-            revenue: totalRevenue,
-          });
-        }
-      } catch (err) {
-        console.error(`Failed to get insights for campaign ${campaign.id}:`, err);
-      }
-    }
-
-    if (winners.length > 0) {
-      await sendWebhookAlert(winners);
+    // Alert on confirmed winners and kill candidates. Promising-but-learning
+    // campaigns are reported in the response but don't trigger an alert (no
+    // judgment during the learning phase).
+    if (result.winners.length > 0 || result.killCandidates.length > 0) {
+      await sendWebhookAlert({
+        event: "roas_scan",
+        timestamp: new Date().toISOString(),
+        config: result.config,
+        winners: result.winners,
+        killCandidates: result.killCandidates,
+      });
     }
 
     return NextResponse.json({
-      message: `Scanned ${campaigns.length} campaign(s), found ${winners.length} winner(s)`,
-      threshold: ROAS_THRESHOLD,
-      winners,
-      results,
+      message: `Scanned ${result.scanned} campaign(s): ${result.winners.length} winner(s), ${result.promising.length} promising, ${result.killCandidates.length} kill candidate(s)`,
+      config: result.config,
+      winners: result.winners,
+      promising: result.promising,
+      killCandidates: result.killCandidates,
     });
   } catch (err) {
     console.error("check-winners cron error:", err);

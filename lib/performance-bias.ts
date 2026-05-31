@@ -7,7 +7,7 @@
 // empty winners list and callers proceed with their normal prompt.
 
 import { db } from "./db";
-import { metaGet } from "./meta";
+import { getCampaignInsightsMulti, roasOf, spendOf, type InsightRow } from "./meta";
 
 export interface ArchetypeWinner {
   hookArchetype: string;
@@ -132,26 +132,32 @@ export function winnersPrompt(winners: ArchetypeWinner[]): string {
 
 // ---- Daily learn cron --------------------------------------------------------
 
-interface MetaInsight {
-  ad_id: string;
-  spend?: string;
-  impressions?: string;
-  ctr?: string;
-  purchase_roas?: Array<{ value: string }>;
+/** Pick the most complete window for the stored signal, preferring lifetime. */
+function pickWindow(
+  lifetime: InsightRow | null,
+  d30: InsightRow | null,
+  d7: InsightRow | null
+): InsightRow | null {
+  // Lifetime (date_preset=maximum) is the most stable "what worked" signal.
+  // Fall back to 30d then 7d if a younger ad has no lifetime aggregate yet.
+  if (lifetime && spendOf(lifetime) > 0) return lifetime;
+  if (d30 && spendOf(d30) > 0) return d30;
+  if (d7 && spendOf(d7) > 0) return d7;
+  return lifetime || d30 || d7;
 }
 
 /**
- * Pull last 30 days of Meta ad-level insights and refresh `variant_perf`
- * rows we've previously recorded. We don't auto-create rows for ads we
- * didn't write to Supabase first — that mapping (ad → archetype) is
- * unknown post-hoc.
+ * Refresh `variant_perf` rows we've previously recorded with fresh Meta
+ * ad-level insights. Per Itay's ironclad rule we read lifetime + 7d + 30d
+ * for every ad and store the lifetime aggregate (with 30d/7d fallbacks for
+ * young ads). We don't auto-create rows for ads we didn't write first — that
+ * mapping (ad → archetype) is unknown post-hoc.
  */
-export async function runLearnCron(opts: { datePreset?: string } = {}): Promise<{
+export async function runLearnCron(): Promise<{
   scanned: number;
   updated: number;
 }> {
   if (!db) return { scanned: 0, updated: 0 };
-  const datePreset = opts.datePreset || "last_30d";
   // Read the variant rows we know about.
   const { data: known } = await db.from(TABLE).select("id, variant_id, meta_ad_id");
   if (!Array.isArray(known) || known.length === 0) return { scanned: 0, updated: 0 };
@@ -160,15 +166,10 @@ export async function runLearnCron(opts: { datePreset?: string } = {}): Promise<
   for (const row of known as VariantPerfRow[]) {
     if (!row.meta_ad_id) continue;
     try {
-      const insights = await metaGet<{ data: MetaInsight[] }>(`/${row.meta_ad_id}/insights`, {
-        fields: "spend,impressions,clicks,ctr,purchase_roas",
-        date_preset: datePreset,
-      });
-      const ins = insights.data?.[0];
+      const { lifetime, d7, d30 } = await getCampaignInsightsMulti(row.meta_ad_id);
+      const ins = pickWindow(lifetime, d30, d7);
       if (!ins) continue;
-      const roas = ins.purchase_roas?.[0]?.value
-        ? Number(ins.purchase_roas[0].value)
-        : null;
+      const roas = roasOf(ins);
       const ctr = ins.ctr ? Number(ins.ctr) : null;
       const spend = ins.spend ? Number(ins.spend) : null;
       const impressions = ins.impressions ? Number(ins.impressions) : null;

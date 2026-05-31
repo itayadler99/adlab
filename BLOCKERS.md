@@ -185,3 +185,74 @@ The 2026-correct chain calls for Topaz Astra v2 at the upscale step.
 Topaz lacks a Replicate slug; we substitute `lucataco/real-esrgan-video`
 in `lib/postprocess.ts`. Quality is close-but-not-identical — if a
 Topaz REST endpoint ships later, swap `UPSCALE_MODEL` and we're done.
+
+---
+
+## Phase M (Terminal 3 — meta loop) env vars
+
+### Live Meta verification blocked
+The env network allowlist blocks `graph.facebook.com`, so the meta-loop
+changes are verified by `tsc` + `npm run build` + review only — no live
+Graph API smoke test was possible. Validate against prod after deploy.
+
+### New / relevant env vars
+```sh
+# Winner + kill scan (/api/cron/check-winners)
+vercel env add CRON_SECRET production          # guards all crons (Vercel sends it as Bearer)
+vercel env add WINNER_WEBHOOK_URL production    # POST target for ROAS-winner + kill alerts
+# Optional overrides (defaults shown):
+#   WINNER_ROAS_THRESHOLD = 3
+#   KILL_SPEND_THRESHOLD  = 200   (account currency — ILS for Montier)
+#   META_AUTO_KILL        = (unset → alert-only; set to 1 to auto-pause kill candidates)
+
+# Fifth store — Montier WW (/api/stores dropdown shows it unconfigured until set)
+vercel env add META_AD_ACCOUNT_MONTIER_WW production
+vercel env add META_PAGE_MONTIER_WW production        # falls back to the Montier US page id
+vercel env add SHOPIFY_DOMAIN_MONTIER_WW production
+vercel env add LINK_MONTIER_WW production
+```
+
+### Kill-rule safety note
+`META_AUTO_KILL` is intentionally OFF by default — check-winners only *reports*
+kill candidates (0 purchases lifetime + spend > ₪200) via the webhook. Flip it
+to `1` only once the owner is comfortable letting the cron pause live campaigns
+automatically. The scan already restricts kills to ACTIVE campaigns.
+
+### A/B launcher activation
+The A/B launcher now creates everything PAUSED (ironclad rule). The owner must
+activate both adsets in Ads Manager for the 5-day ROAS comparison to gather
+data; check-ab-winners leaves a test pending until real spend lands on both
+adsets, so activation timing no longer causes a premature tie.
+
+---
+
+## Phase M2 (Terminal 3) — follow-ups & deferred items
+
+### Klaviyo full campaign send flow (deferred — needs live account)
+`lib/klaviyo.ts` now does templates + list management + RTL Hebrew email, but
+the multi-step "create campaign → attach campaign-message → assign template →
+create send-job" flow was NOT shipped because the exact 2024-10-15 request
+shapes can't be validated without a live Klaviyo account (mirrors the project's
+"don't ship unverifiable API calls" stance). To finish later, implement against
+a sandbox key and verify each step returns 2xx:
+```
+POST /api/campaigns/                      # campaign + audiences.included:[listId]
+POST /api/campaign-message-assign-template/
+POST /api/campaign-send-jobs/             # trigger the send
+```
+
+### New env vars (Phase M2)
+```sh
+# Learning-phase gate (check-winners / lib/learn.ts)
+#   LEARNING_MIN_DAYS        = 4    (no winner verdict before this many days)
+#   LEARNING_MIN_CONVERSIONS = 50   (or before this many lifetime purchases)
+# A/B decision floor (check-ab-winners)
+#   AB_MIN_SPEND        = 50
+#   AB_MIN_CONVERSIONS  = 5
+# Per-store ad accounts already documented in Phase M; the launch + abtest
+# routes now accept store_id and target that store's account automatically.
+```
+
+### Audit table (Phase M2)
+Run `supabase/migrations/v4_roas_scan_log.sql` to enable scan audit logging.
+Degrades gracefully (persistScan no-ops) when absent.

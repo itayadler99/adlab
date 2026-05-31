@@ -12,9 +12,18 @@ import { runLearnCron, markWinner } from "@/lib/performance-bias";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
+function authorized(req: NextRequest): boolean {
+  const cronSecret = process.env.CRON_SECRET;
+  if (!cronSecret) return true;
+  const query = req.nextUrl.searchParams.get("secret");
+  const xheader = req.headers.get("x-cron-secret");
+  // Vercel Cron sends `Authorization: Bearer <CRON_SECRET>` automatically.
+  const bearer = req.headers.get("authorization");
+  return query === cronSecret || xheader === cronSecret || bearer === `Bearer ${cronSecret}`;
+}
+
 export async function GET(req: NextRequest) {
-  const secret = req.nextUrl.searchParams.get("secret") || req.headers.get("x-cron-secret");
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!authorized(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   try {

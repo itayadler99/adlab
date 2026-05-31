@@ -1,22 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listPendingComparisons, updateAbTest } from "@/lib/abtests";
-import { metaGet } from "@/lib/meta";
-
-async function getAdsetInsights(adsetId: string, since: string, until: string) {
-  return metaGet(`/${adsetId}/insights`, {
-    fields: "spend,action_values",
-    time_range: JSON.stringify({ since, until }),
-  });
-}
+import { metaGet, roasOf, spendOf, purchaseCount, type InsightRow } from "@/lib/meta";
 
 export const runtime = "nodejs";
 
+// Min data before an A/B test is allowed to decide. A single fluke purchase
+// shouldn't crown a winner. Overridable via env.
+const AB_MIN_SPEND = Number(process.env.AB_MIN_SPEND || 50);
+const AB_MIN_CONVERSIONS = Number(process.env.AB_MIN_CONVERSIONS || 5);
+
+async function getAdsetInsightRow(adsetId: string, since: string, until: string): Promise<InsightRow | null> {
+  const json = await metaGet<{ data?: InsightRow[] }>(`/${adsetId}/insights`, {
+    fields: "spend,actions,action_values,purchase_roas",
+    time_range: JSON.stringify({ since, until }),
+  });
+  return json.data?.[0] ?? null;
+}
+
+function authorized(req: NextRequest): boolean {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return true;
+  const header = req.headers.get("authorization");
+  const query = req.nextUrl.searchParams.get("secret");
+  return header === `Bearer ${secret}` || query === secret;
+}
+
 export async function GET(req: NextRequest) {
-  const authHeader = req.headers.get("authorization");
-  if (
-    process.env.CRON_SECRET &&
-    authHeader !== `Bearer ${process.env.CRON_SECRET}`
-  ) {
+  if (!authorized(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -34,13 +44,31 @@ export async function GET(req: NextRequest) {
         : new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString().slice(0, 10);
       const until = new Date().toISOString().slice(0, 10);
 
-      const [insightsA, insightsB] = await Promise.all([
-        getAdsetInsights(test.adset_id_a, since, until),
-        getAdsetInsights(test.adset_id_b, since, until),
+      const [rowA, rowB] = await Promise.all([
+        getAdsetInsightRow(test.adset_id_a, since, until),
+        getAdsetInsightRow(test.adset_id_b, since, until),
       ]);
 
-      const roasA = extractRoas(insightsA);
-      const roasB = extractRoas(insightsB);
+      // Campaigns launch PAUSED (ironclad rule); the owner activates them in
+      // Ads Manager. Don't decide until there's enough real data on both arms:
+      // combined spend over the floor AND at least one arm with enough
+      // conversions. Otherwise leave pending and re-check next run.
+      const spendA = spendOf(rowA);
+      const spendB = spendOf(rowB);
+      const convA = purchaseCount(rowA);
+      const convB = purchaseCount(rowB);
+      const enoughSpend = spendA + spendB >= AB_MIN_SPEND;
+      const enoughConversions = Math.max(convA, convB) >= AB_MIN_CONVERSIONS;
+      if (!enoughSpend || !enoughConversions) {
+        results.push({
+          id: test.id,
+          error: `insufficient data — spend ₪${(spendA + spendB).toFixed(0)}/${AB_MIN_SPEND}, conv ${Math.max(convA, convB)}/${AB_MIN_CONVERSIONS}; still pending`,
+        });
+        continue;
+      }
+
+      const roasA = roasOf(rowA) ?? 0;
+      const roasB = roasOf(rowB) ?? 0;
 
       let winner: string;
       if (roasA > roasB) winner = "A";
@@ -63,17 +91,4 @@ export async function GET(req: NextRequest) {
   }
 
   return NextResponse.json({ processed: results.length, results });
-}
-
-function extractRoas(insights: unknown): number {
-  const data = (insights as { data?: unknown[] })?.data;
-  if (!data || !Array.isArray(data) || data.length === 0) return 0;
-  const row = data[0] as Record<string, unknown>;
-  const actions = row.action_values as Array<{ action_type: string; value: string }> | undefined;
-  if (!actions) return 0;
-  const purchase = actions.find((a) => a.action_type === "purchase");
-  if (!purchase) return 0;
-  const spend = parseFloat(String(row.spend ?? "0"));
-  if (spend === 0) return 0;
-  return parseFloat(purchase.value) / spend;
 }

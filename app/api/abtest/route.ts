@@ -7,7 +7,9 @@ import {
   uploadVideoFromUrl,
   createVideoCreative,
   createAd,
+  waitForVideoReady,
 } from "@/lib/meta";
+import { getStore } from "@/lib/stores";
 
 const FIVE_DAYS_MS = 5 * 24 * 60 * 60 * 1000;
 
@@ -25,14 +27,23 @@ export async function POST(req: NextRequest) {
       model_a = "minimax",
       model_b = "kling-1.6",
       daily_budget = 10,
-      page_id,
-      link,
       thumbnail_url,
+      pixel_id,
+      store_id,
     } = body;
+
+    // Multi-store: resolve page/link/account from the store when provided.
+    const store = store_id ? getStore(store_id) : undefined;
+    if (store_id && !store) {
+      return NextResponse.json({ error: `unknown store_id: ${store_id}` }, { status: 400 });
+    }
+    const page_id = body.page_id || store?.pageId;
+    const link = body.link || store?.defaultLink;
+    const accountId = body.ad_account_id || store?.adAccountId || undefined;
 
     if (!script || !product_id || !page_id || !link) {
       return NextResponse.json(
-        { error: "script, product_id, page_id, link required" },
+        { error: "script, product_id, and page_id+link (or a configured store) required" },
         { status: 400 }
       );
     }
@@ -56,7 +67,7 @@ export async function POST(req: NextRequest) {
       video_job_b: jobB.id,
       status: "generating",
       compare_after: compareAfter,
-      meta: { daily_budget, page_id, link, thumbnail_url },
+      meta: { daily_budget, page_id, link, thumbnail_url, pixel_id, store_id, accountId },
     });
 
     launchWhenReady(test.id, jobA.id, jobB.id, ma, mb, {
@@ -64,6 +75,8 @@ export async function POST(req: NextRequest) {
       daily_budget,
       link,
       thumbnail_url,
+      pixel_id,
+      accountId,
     }).catch(console.error);
 
     return NextResponse.json({ id: test.id, status: "generating" });
@@ -90,7 +103,7 @@ async function launchWhenReady(
   jobIdB: string,
   modelA: VideoModel,
   modelB: VideoModel,
-  opts: { page_id: string; daily_budget: number; link: string; thumbnail_url?: string }
+  opts: AdsetOpts
 ) {
   const [urlA, urlB] = await Promise.all([
     pollUntilDone(jobIdA, modelA),
@@ -103,10 +116,14 @@ async function launchWhenReady(
     status: "launching",
   });
 
+  // Itay's ironclad rule: all Meta campaigns are created PAUSED. The owner
+  // activates both adsets in Ads Manager; check-ab-winners then waits until
+  // real spend lands before declaring a winner (see the zero-spend guard).
   const campaign = await createCampaign({
     name: `AB Test ${testId.slice(0, 8)}`,
     objective: "OUTCOME_SALES",
-    status: "ACTIVE",
+    status: "PAUSED",
+    accountId: opts.accountId,
   });
   const campaignId = campaign.id;
 
@@ -122,16 +139,31 @@ async function launchWhenReady(
     ad_id_a: resultA.adId,
     ad_id_b: resultB.adId,
     status: "running",
+    // Anchor the comparison window at launch. Adsets are PAUSED until the owner
+    // activates; the min-data gate in check-ab-winners keeps the test pending
+    // until real spend lands, so an early anchor is safe.
+    started_at: new Date().toISOString(),
   });
+}
+
+interface AdsetOpts {
+  page_id: string;
+  daily_budget: number;
+  link: string;
+  thumbnail_url?: string;
+  pixel_id?: string;
+  accountId?: string;
 }
 
 async function setupAdset(
   campaignId: string,
   videoUrl: string,
   modelName: string,
-  opts: { page_id: string; daily_budget: number; link: string; thumbnail_url?: string }
+  opts: AdsetOpts
 ) {
-  const video = await uploadVideoFromUrl(videoUrl, `abtest-${modelName}`);
+  const video = await uploadVideoFromUrl(videoUrl, `abtest-${modelName}`, opts.accountId);
+  // Wait for Meta to finish processing before building the creative.
+  await waitForVideoReady(video.id);
   const creative = await createVideoCreative({
     name: `Creative-${modelName}`,
     page_id: opts.page_id,
@@ -139,19 +171,27 @@ async function setupAdset(
     thumbnail_url: opts.thumbnail_url || "",
     message: "",
     link: opts.link,
+    accountId: opts.accountId,
   });
+  // Optimize for purchases when a pixel is supplied (real ROAS A/B); otherwise
+  // createAdset falls back to LINK_CLICKS. Bid strategy stays the default
+  // LOWEST_COST_WITHOUT_CAP (never Bid Cap).
   const adset = await createAdset({
     name: `Adset-${modelName}`,
     campaign_id: campaignId,
     daily_budget: opts.daily_budget,
     page_id: opts.page_id,
-    status: "ACTIVE",
+    pixel_id: opts.pixel_id,
+    custom_event_type: opts.pixel_id ? "PURCHASE" : undefined,
+    status: "PAUSED",
+    accountId: opts.accountId,
   });
   const ad = await createAd({
     name: `Ad-${modelName}`,
     adset_id: adset.id,
     creative_id: creative.id,
-    status: "ACTIVE",
+    status: "PAUSED",
+    accountId: opts.accountId,
   });
   return { adsetId: adset.id, adId: ad.id };
 }

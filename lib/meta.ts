@@ -6,55 +6,243 @@ function token() {
   if (!t) throw new Error("META_ACCESS_TOKEN not set");
   return t;
 }
-function adAccount() {
-  return process.env.META_AD_ACCOUNT_ID || "act_2312364629134701";
+function adAccount(accountId?: string) {
+  return accountId || process.env.META_AD_ACCOUNT_ID || "act_2312364629134701";
+}
+
+// Meta error codes that are transient / rate-limit related and worth retrying.
+const RETRYABLE_CODES = new Set([1, 2, 4, 17, 32, 341, 368, 613, 80000, 80001, 80002, 80003, 80004]);
+const MAX_RETRIES = 3;
+
+function isRetryable(status: number, err?: { code?: number; is_transient?: boolean }): boolean {
+  if (status === 429 || status === 500 || status === 502 || status === 503 || status === 504) return true;
+  if (err?.is_transient) return true;
+  if (err?.code != null && RETRYABLE_CODES.has(err.code)) return true;
+  return false;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function metaFetch<T>(url: string, init?: RequestInit, label = "Meta API"): Promise<T> {
+  let lastErr: Error | null = null;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(url, init);
+    } catch (networkErr) {
+      // Network blip — retry with backoff
+      lastErr = networkErr instanceof Error ? networkErr : new Error(String(networkErr));
+      if (attempt < MAX_RETRIES) {
+        await sleep(1000 * 2 ** attempt);
+        continue;
+      }
+      throw lastErr;
+    }
+    let json: any;
+    try {
+      json = await res.json();
+    } catch {
+      json = null;
+    }
+    if (res.ok && !(json && json.error)) return json as T;
+
+    const err = json?.error;
+    if (isRetryable(res.status, err) && attempt < MAX_RETRIES) {
+      await sleep(1000 * 2 ** attempt);
+      continue;
+    }
+    const msg = err?.message || `${label} failed ${res.status}`;
+    throw new Error(`Meta API: ${msg}`);
+  }
+  throw lastErr || new Error(`${label} failed after retries`);
 }
 
 export async function metaGet<T = any>(path: string, params: Record<string, string | number> = {}): Promise<T> {
   const url = new URL(`${BASE}${path}`);
   url.searchParams.set("access_token", token());
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
-  const res = await fetch(url.toString());
-  const json = await res.json();
-  if (!res.ok || (json && json.error)) {
-    const msg = json?.error?.message || `Meta GET ${path} failed ${res.status}`;
-    throw new Error(`Meta API: ${msg}`);
-  }
-  return json;
+  return metaFetch<T>(url.toString(), undefined, `Meta GET ${path}`);
 }
 
 export async function metaPost<T = any>(path: string, body: Record<string, any> = {}): Promise<T> {
   const url = new URL(`${BASE}${path}`);
   url.searchParams.set("access_token", token());
-  const res = await fetch(url.toString(), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const json = await res.json();
-  if (!res.ok || (json && json.error)) {
-    const msg = json?.error?.message || `Meta POST ${path} failed ${res.status}`;
-    throw new Error(`Meta API: ${msg}`);
-  }
-  return json;
+  return metaFetch<T>(
+    url.toString(),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+    `Meta POST ${path}`
+  );
 }
 
-export async function getCampaigns(statusFilter: "ACTIVE" | "PAUSED" | "ALL" = "ALL") {
+export interface Campaign {
+  id: string;
+  name?: string;
+  status?: string;
+  effective_status?: string;
+  objective?: string;
+  daily_budget?: string;
+  lifetime_budget?: string;
+  created_time?: string;
+}
+
+export interface InsightRow {
+  campaign_id?: string;
+  spend?: string;
+  impressions?: string;
+  clicks?: string;
+  ctr?: string;
+  cpc?: string;
+  cpm?: string;
+  actions?: Array<{ action_type: string; value: string }>;
+  action_values?: Array<{ action_type: string; value: string }>;
+  purchase_roas?: Array<{ action_type?: string; value: string }>;
+  date_start?: string;
+  date_stop?: string;
+}
+
+// Meta reports purchases under several action_type aliases depending on
+// pixel/conversion-api setup. Check them in priority order.
+const PURCHASE_ACTION_TYPES = [
+  "offsite_conversion.fb_pixel_purchase",
+  "omni_purchase",
+  "purchase",
+];
+
+const INSIGHT_FIELDS =
+  "spend,impressions,clicks,ctr,cpc,cpm,actions,action_values,purchase_roas";
+
+/** Lifetime purchase count from an insight row (0 when none). */
+export function purchaseCount(row?: InsightRow | null): number {
+  if (!row?.actions) return 0;
+  for (const t of PURCHASE_ACTION_TYPES) {
+    const a = row.actions.find((x) => x.action_type === t);
+    if (a) return Math.round(Number(a.value) || 0);
+  }
+  return 0;
+}
+
+/** Purchase revenue (value) from an insight row. */
+export function purchaseValue(row?: InsightRow | null): number {
+  if (!row?.action_values) return 0;
+  for (const t of PURCHASE_ACTION_TYPES) {
+    const a = row.action_values.find((x) => x.action_type === t);
+    if (a) return Number(a.value) || 0;
+  }
+  return 0;
+}
+
+/** ROAS from an insight row. Prefers Meta's purchase_roas, falls back to value/spend. Null when no spend. */
+export function roasOf(row?: InsightRow | null): number | null {
+  if (!row) return null;
+  if (row.purchase_roas?.length) {
+    const v = Number(row.purchase_roas[0].value);
+    if (Number.isFinite(v)) return v;
+  }
+  const spend = Number(row.spend) || 0;
+  if (spend <= 0) return null;
+  return purchaseValue(row) / spend;
+}
+
+export function spendOf(row?: InsightRow | null): number {
+  return Number(row?.spend) || 0;
+}
+
+export async function getCampaigns(
+  statusFilter: "ACTIVE" | "PAUSED" | "ALL" = "ALL",
+  accountId?: string
+): Promise<Campaign[]> {
   const params: Record<string, string> = {
-    fields: "id,name,status,objective,daily_budget,lifetime_budget,created_time",
+    fields: "id,name,status,effective_status,objective,daily_budget,lifetime_budget,created_time",
     limit: "100",
   };
   if (statusFilter !== "ALL") {
     params.effective_status = JSON.stringify([statusFilter]);
   }
-  return metaGet(`/${adAccount()}/campaigns`, params);
+  // Follow pagination so accounts with >100 campaigns are fully scanned.
+  const out: Campaign[] = [];
+  let json = await metaGet<{ data?: Campaign[]; paging?: { next?: string } }>(
+    `/${adAccount(accountId)}/campaigns`,
+    params
+  );
+  out.push(...(json.data ?? []));
+  let guard = 0;
+  while (json.paging?.next && guard < 20) {
+    guard++;
+    json = await metaFetch<{ data?: Campaign[]; paging?: { next?: string } }>(
+      json.paging.next,
+      undefined,
+      "Meta GET campaigns(page)"
+    );
+    out.push(...(json.data ?? []));
+  }
+  return out;
 }
 
-export async function getCampaignInsights(campaignId: string, datePreset = "last_7d") {
-  return metaGet(`/${campaignId}/insights`, {
-    fields: "spend,impressions,clicks,ctr,cpc,cpm,actions,action_values,purchase_roas",
+/** Single-window insight rows for one campaign. Unwraps Meta's `{data}` envelope. */
+export async function getCampaignInsights(
+  campaignId: string,
+  datePreset = "last_7d"
+): Promise<InsightRow[]> {
+  const json = await metaGet<{ data?: InsightRow[] }>(`/${campaignId}/insights`, {
+    fields: INSIGHT_FIELDS,
     date_preset: datePreset,
   });
+  return json.data ?? [];
+}
+
+export interface MultiWindowInsights {
+  lifetime: InsightRow | null;
+  d7: InsightRow | null;
+  d30: InsightRow | null;
+}
+
+/**
+ * Itay's ironclad rule: always read lifetime + 7d + 30d. `date_preset=maximum`
+ * is the lifetime window. Returns the single aggregated row per window (or null).
+ */
+export async function getCampaignInsightsMulti(
+  campaignId: string
+): Promise<MultiWindowInsights> {
+  const [lifetime, d7, d30] = await Promise.all([
+    getCampaignInsights(campaignId, "maximum").catch(() => []),
+    getCampaignInsights(campaignId, "last_7d").catch(() => []),
+    getCampaignInsights(campaignId, "last_30d").catch(() => []),
+  ]);
+  return {
+    lifetime: lifetime[0] ?? null,
+    d7: d7[0] ?? null,
+    d30: d30[0] ?? null,
+  };
+}
+
+/** Account-level insights broken down by campaign, keyed by campaign_id. One API call. */
+export async function getAccountCampaignInsights(
+  datePreset = "last_7d",
+  accountId?: string
+): Promise<Record<string, InsightRow>> {
+  const json = await metaGet<{ data?: InsightRow[] }>(`/${adAccount(accountId)}/insights`, {
+    level: "campaign",
+    fields: `campaign_id,${INSIGHT_FIELDS}`,
+    date_preset: datePreset,
+    limit: "200",
+  });
+  const map: Record<string, InsightRow> = {};
+  for (const r of json.data ?? []) {
+    if (r.campaign_id) map[r.campaign_id] = r;
+  }
+  return map;
+}
+
+/** Pause or activate a campaign. Used by the kill-rule guard (opt-in). */
+export async function setCampaignStatus(
+  campaignId: string,
+  status: "ACTIVE" | "PAUSED"
+) {
+  return metaPost(`/${campaignId}`, { status });
 }
 
 export async function createCampaign(opts: {
@@ -62,8 +250,9 @@ export async function createCampaign(opts: {
   objective?: string;
   status?: "ACTIVE" | "PAUSED";
   daily_budget?: number;
+  accountId?: string;
 }) {
-  return metaPost(`/${adAccount()}/campaigns`, {
+  return metaPost(`/${adAccount(opts.accountId)}/campaigns`, {
     name: opts.name,
     objective: opts.objective || "OUTCOME_SALES",
     status: opts.status || "PAUSED",
@@ -83,13 +272,14 @@ export async function createAdset(opts: {
   pixel_id?: string;
   custom_event_type?: string;
   status?: "ACTIVE" | "PAUSED";
+  accountId?: string;
 }) {
   const targeting = {
     geo_locations: { countries: opts.countries || ["US"] },
     age_min: opts.age_min || 18,
     age_max: opts.age_max || 65,
   };
-  return metaPost(`/${adAccount()}/adsets`, {
+  return metaPost(`/${adAccount(opts.accountId)}/adsets`, {
     name: opts.name,
     campaign_id: opts.campaign_id,
     daily_budget: opts.daily_budget * 100,
@@ -104,22 +294,56 @@ export async function createAdset(opts: {
   });
 }
 
-export async function uploadVideoFromUrl(videoUrl: string, name?: string) {
-  return metaPost(`/${adAccount()}/advideos`, {
+export async function uploadVideoFromUrl(videoUrl: string, name?: string, accountId?: string) {
+  return metaPost(`/${adAccount(accountId)}/advideos`, {
     file_url: videoUrl,
     name: name || `adlab-${Date.now()}`,
   });
 }
 
-export async function uploadImageFromUrl(imageUrl: string) {
+/**
+ * Poll a freshly uploaded video until Meta finishes processing. Creating a
+ * creative against a not-ready video fails, so callers should await this first.
+ * Fails open (resolves) after the timeout so a slow encode doesn't hard-block.
+ */
+export async function waitForVideoReady(
+  videoId: string,
+  opts: { timeoutMs?: number; intervalMs?: number } = {}
+): Promise<{ ready: boolean; status: string }> {
+  const timeoutMs = opts.timeoutMs ?? 120000;
+  const intervalMs = opts.intervalMs ?? 5000;
+  const deadline = Date.now() + timeoutMs;
+  let status = "unknown";
+  while (Date.now() < deadline) {
+    try {
+      const j = await metaGet<{ status?: { video_status?: string } }>(`/${videoId}`, {
+        fields: "status",
+      });
+      status = j.status?.video_status || "unknown";
+      if (status === "ready") return { ready: true, status };
+      if (status === "error") return { ready: false, status };
+    } catch {
+      /* transient — keep polling until deadline */
+    }
+    await sleep(intervalMs);
+  }
+  return { ready: false, status };
+}
+
+export async function uploadImageFromUrl(imageUrl: string, accountId?: string) {
   // Meta image upload requires file/bytes — fetch then re-post as multipart
   const img = await fetch(imageUrl);
+  if (!img.ok) throw new Error(`Image fetch failed ${img.status} for ${imageUrl}`);
   const buf = Buffer.from(await img.arrayBuffer());
   const form = new FormData();
   form.append("source", new Blob([buf]), "image.jpg");
   form.append("access_token", token());
-  const res = await fetch(`${BASE}/${adAccount()}/adimages`, { method: "POST", body: form });
-  return res.json();
+  const res = await fetch(`${BASE}/${adAccount(accountId)}/adimages`, { method: "POST", body: form });
+  const json = await res.json();
+  if (!res.ok || json?.error) {
+    throw new Error(`Meta API: ${json?.error?.message || `image upload failed ${res.status}`}`);
+  }
+  return json;
 }
 
 export async function createVideoCreative(opts: {
@@ -130,6 +354,7 @@ export async function createVideoCreative(opts: {
   message: string;
   link: string;
   cta_type?: string;
+  accountId?: string;
 }) {
   const video_data: Record<string, unknown> = {
     video_id: opts.video_id,
@@ -143,7 +368,7 @@ export async function createVideoCreative(opts: {
   if (opts.thumbnail_url && opts.thumbnail_url.startsWith("http")) {
     video_data.image_url = opts.thumbnail_url;
   }
-  return metaPost(`/${adAccount()}/adcreatives`, {
+  return metaPost(`/${adAccount(opts.accountId)}/adcreatives`, {
     name: opts.name,
     object_story_spec: {
       page_id: opts.page_id,
@@ -157,8 +382,9 @@ export async function createAd(opts: {
   adset_id: string;
   creative_id: string;
   status?: "ACTIVE" | "PAUSED";
+  accountId?: string;
 }) {
-  return metaPost(`/${adAccount()}/ads`, {
+  return metaPost(`/${adAccount(opts.accountId)}/ads`, {
     name: opts.name,
     adset_id: opts.adset_id,
     creative: { creative_id: opts.creative_id },
