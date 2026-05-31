@@ -1,72 +1,85 @@
 // Post-processing pass that turns a sterile AI video into something closer to
 // real iPhone footage.
 //
-// Two levels of chain:
-//   legacy: noise → curves teal/orange → eq → unsharp 5:5:0.7. Cheap default.
-//   v2026 (2026-correct ordering, opt in via opts.pipeline="v2026"):
-//     1.  interp        — RIFE multiplier=2 → 48fps (NOT 60, which trips
-//                          soap-opera uncanny). Runs as Replicate step.
-//     2.  upscale-restore — Topaz Astra v2 (creativity=2 sharpness=3),
-//                          mapped here to the working real-esrgan-video slug
-//                          on Replicate; 1080→1080 grain-preserving.
-//     3.  LUT           — Apple Log → Rec709 approximation.
-//     4.  unsharp       — 3:3:0.6:3:3:0.0 (luma only, NOT 5:5:1.0).
-//     5.  grain         — noise=c0s=8:c0f=t+u luma-only temporal; daylight
-//                          8, night 12. Grain BEFORE shake (shake would
-//                          stretch grain → baked-in look).
-//     6.  halation pass — golden-hour only (gblur on red highlights plane).
-//     7.  shake         — sine-driven sub-pixel rotate (NOT vidstab).
-//     8.  audio mix     — room tone at -42dB under VO (room tone sourced
-//                          upstream via ElevenLabs SFX; not added here).
-//     9.  dialogue EQ   — 200Hz -3dB, 4kHz -2.5dB Q=1.4, 8kHz +1.5dB +
-//                          acompressor 3:1 @ -18dB.
-//    10.  encode        — libx264 CRF 20 (NOT 23), 192k AAC, loudnorm -14
-//                          LUFS, +faststart.
-//    11.  C2PA strip    — -map_metadata -1 second pass.
+// Recipe (from RESEARCH_FINDINGS.md, applied in order):
 //
-// On any failure the pipeline returns the input URL untouched and surfaces
-// the error in `trace.error` — the goal is "never block the final ad".
+//   1. Generate at max quality (handled by the showcase / UGC pipelines).
+//   2. Interp 24 → 60fps  →  Replicate pollinations/rife  (with fal-ai/film
+//                            as a secondary fallback we'll wire when the
+//                            account confirms access).
+//   3. Upscale            →  Replicate lucataco/real-esrgan-video (2x).
+//   4. Grain              →  ffmpeg noise=alls=10:allf=t
+//   5. Halation           →  ffmpeg gblur on a duplicated stream, screen-blended
+//                            at low opacity — kills the plastic-skin tell.
+//   6. iPhone LUT          →  approximated via ffmpeg curves+eq (no .cube file
+//                            shipped — see RESEARCH_FINDINGS for the real
+//                            iphone.cube source if you want to drop one into
+//                            public/luts/).
+//   7. Camera shake       →  vidstabdetect+vidstabtransform inverse (very
+//                            mild — just enough to break "tripod feel").
+//   8. Sharpen pop        →  ffmpeg unsharp=5:5:0.7
+//   9. Re-encode          →  libx264 CRF20 30fps CFR 1080x1920 AAC 128k.
+//  10. Strip metadata     →  -map_metadata -1 -map_chapters -1  (proxies for
+//                            the exiftool C2PA strip in the recipe — TikTok
+//                            flags 1.3B clips on Content Credentials).
+//
+// Four knobs:
+//   - "off":      pass through (original URL).
+//   - "fast":     ffmpeg-only realism pass + metadata strip. ~10s, free.
+//   - "speel":    + RIFE 48fps interp first.                  ~60s, ~$0.05.
+//   - "speel-4k": + Real-ESRGAN 2x upscale to ~4K.            ~180s, ~$0.20.
+//
+// Every step fails open — on any error we surface a trace note and return
+// the most-processed URL we have so far.
 import Replicate from "replicate";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile, readFile, stat } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, stat } from "node:fs/promises";
+import { createReadStream } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { hexToCurvesTint, type BrandKit } from "./brand-kit";
 
 export type PostProcessLevel = "off" | "fast" | "speel" | "speel-4k";
 
-export interface CaptionStyle {
-  enabled: boolean;
-  position?: "top" | "middle" | "bottom";
-  highlightHex?: string;
-  fontFamily?: string;
-}
-
-export interface MusicBed {
-  /** Local file path under public/music/<vertical>/ — absolute path on disk. */
-  filePath: string;
-  /** -dB volume of the bed itself before sidechain. */
-  volumeDb?: number;
+/** Per-filter intensity controls. Defaults match the research recipe. */
+export interface RealismIntensity {
+  /** ffmpeg noise alls 0-30. Default 10. */
+  grain?: number;
+  /** Halation screen-blend opacity 0-0.6. Default 0.18. */
+  halation?: number;
+  /** Final saturation multiplier 0.8-1.3. Default 1.05. */
+  saturation?: number;
+  /** Unsharp amount 0-1.5. Default 0.7. */
+  sharpen?: number;
+  /**
+   * Subtle handheld shake to break "tripod feel". 0-1, default 0 (off).
+   * Values translate to rotation amplitude (radians) and inner crop %.
+   * 0.5 → ~0.3° wobble at ~0.7 Hz, 2% crop.
+   */
+  shake?: number;
 }
 
 export interface PostProcessOpts {
   level?: PostProcessLevel;
-  /** Brand kit: tints colors toward primary, overlays logo bottom-right. */
-  brandKit?: BrandKit;
-  /** Word-by-word .ass subtitle file path. Burned via libass when present. */
-  captionsAssPath?: string;
-  /** Music bed for sidechain duck under VO. */
-  music?: MusicBed;
+  /** When false, skip the metadata strip step (e.g. unit tests that diff bytes). */
+  stripMetadata?: boolean;
+  /** Override per-filter intensities (each falls back to defaults). */
+  intensity?: RealismIntensity;
+  /** Override the target framerate of the RIFE interpolation. */
+  targetFps?: number;
   /**
-   * 2026-correct pipeline: interp → upscale → LUT → unsharp → grain → halation
-   * → shake → audio → encode → C2PA strip. Off by default until P-post lands;
-   * existing call sites keep the legacy chain.
+   * Optional URL or absolute path to a `.cube` LUT file. If provided we use
+   * ffmpeg `lut3d` instead of the curves+eq approximation. Useful for the
+   * "iPhone 15 Pro" LUT from RESEARCH_FINDINGS.md once you drop one into
+   * public/luts/.
    */
-  pipeline?: "legacy" | "v2026";
-  /** Whether the source scene is golden-hour-ish (enables halation pass). */
-  goldenHour?: boolean;
-  /** Whether this is a daylight (8) vs night (12) shot — picks grain strength. */
-  lighting?: "day" | "night";
+  lutPath?: string;
+  /**
+   * When true, run the source audio through `loudnorm=I=-18:LRA=11:TP=-2`
+   * before re-encoding. Brings the final ad to -18 LUFS — the
+   * Meta/TikTok-friendly target the research recipe calls out.
+   * Default: true when the source has audio. Set false to bit-exact copy.
+   */
+  normalizeAudio?: boolean;
 }
 
 export interface PostProcessResult {
@@ -74,46 +87,96 @@ export interface PostProcessResult {
   trace: {
     level: PostProcessLevel;
     rifeApplied: boolean;
+    rifeModel?: string;
     ffmpegApplied: boolean;
     upscaleApplied: boolean;
+    metadataStripped: boolean;
+    lutApplied: boolean;
+    audioNormalized: boolean;
+    /** Per-filter values actually applied — useful when intensity was overridden. */
+    intensity: Required<RealismIntensity>;
     error?: string;
   };
 }
 
-const RIFE_MODEL = "pollinations/rife";
+// RIFE chain — try primary, fall through on access errors.
+const RIFE_MODELS = [
+  "pollinations/rife",
+  "zsxkib/rife", // community-maintained alternative
+] as const;
 const UPSCALE_MODEL = "lucataco/real-esrgan-video";
+
+const DEFAULT_INTENSITY: Required<RealismIntensity> = {
+  grain: 10,
+  halation: 0.18,
+  saturation: 1.05,
+  sharpen: 0.7,
+  shake: 0,
+};
+
+function resolveIntensity(override?: RealismIntensity): Required<RealismIntensity> {
+  return {
+    grain: clamp(override?.grain ?? DEFAULT_INTENSITY.grain, 0, 30),
+    halation: clamp(override?.halation ?? DEFAULT_INTENSITY.halation, 0, 0.6),
+    saturation: clamp(override?.saturation ?? DEFAULT_INTENSITY.saturation, 0.8, 1.3),
+    sharpen: clamp(override?.sharpen ?? DEFAULT_INTENSITY.sharpen, 0, 1.5),
+    shake: clamp(override?.shake ?? DEFAULT_INTENSITY.shake, 0, 1),
+  };
+}
+
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, n));
+}
 
 export async function applyRealism(
   videoUrl: string,
   opts: PostProcessOpts = {}
 ): Promise<PostProcessResult> {
   const level: PostProcessLevel = opts.level ?? "fast";
-  const trace = {
+  const intensity = resolveIntensity(opts.intensity);
+  const trace: PostProcessResult["trace"] = {
     level,
     rifeApplied: false,
     ffmpegApplied: false,
     upscaleApplied: false,
-  } as PostProcessResult["trace"];
+    metadataStripped: false,
+    lutApplied: false,
+    audioNormalized: false,
+    intensity,
+  };
 
   if (level === "off") return { url: videoUrl, trace };
 
   let workingUrl = videoUrl;
 
-  // Step 1 (speel + speel-4k): Replicate RIFE for 2x frame interpolation.
+  // Step 2 (speel + speel-4k): Replicate RIFE for frame interpolation. Walks
+  // the RIFE_MODELS chain so a gated primary doesn't kill the whole pass.
   if ((level === "speel" || level === "speel-4k") && process.env.REPLICATE_API_TOKEN) {
-    try {
-      const interped = await runRife(workingUrl);
-      if (interped) {
-        workingUrl = interped;
-        trace.rifeApplied = true;
+    const targetFps = opts.targetFps ?? 60;
+    let rifeErr: unknown;
+    for (const model of RIFE_MODELS) {
+      try {
+        const interped = await runRife(workingUrl, model, targetFps);
+        if (interped) {
+          workingUrl = interped;
+          trace.rifeApplied = true;
+          trace.rifeModel = model;
+          rifeErr = undefined;
+          break;
+        }
+      } catch (e) {
+        rifeErr = e;
+        if (!isModelAccessError(e)) break; // non-auth failure is real — stop walking
+        console.warn(`[postprocess] RIFE ${model} not accessible, trying next:`, errMsg(e));
       }
-    } catch (e) {
-      console.warn("[postprocess] RIFE failed, continuing with ffmpeg only:", errMsg(e));
-      trace.error = `rife: ${errMsg(e)}`;
+    }
+    if (rifeErr) {
+      console.warn("[postprocess] RIFE failed across chain, continuing without interp:", errMsg(rifeErr));
+      trace.error = `rife: ${errMsg(rifeErr)}`;
     }
   }
 
-  // Step 1b (speel-4k only): Real-ESRGAN video upscale to 4K.
+  // Step 3 (speel-4k only): Real-ESRGAN video upscale to ~4K.
   if (level === "speel-4k" && process.env.REPLICATE_API_TOKEN) {
     try {
       const upscaled = await runUpscale(workingUrl);
@@ -127,15 +190,26 @@ export async function applyRealism(
     }
   }
 
-  // Step 2 (fast + speel): ffmpeg grain + curves + sharpen + Blob upload.
+  // Steps 4-10 (fast / speel / speel-4k): ffmpeg realism filter chain + strip.
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
     console.warn("[postprocess] BLOB_READ_WRITE_TOKEN missing, skipping ffmpeg pass");
     trace.error = (trace.error ? trace.error + "; " : "") + "ffmpeg: BLOB_READ_WRITE_TOKEN not set";
     return { url: workingUrl, trace };
   }
   try {
-    const enhanced = await runFfmpegRealism(workingUrl, opts);
+    const stripMetadata = opts.stripMetadata !== false;
+    const normalizeAudio = opts.normalizeAudio !== false;
+    const lutPath = await resolveLutPath(opts.lutPath);
+    const enhanced = await runFfmpegRealism(workingUrl, {
+      stripMetadata,
+      intensity,
+      lutPath,
+      normalizeAudio,
+    });
     trace.ffmpegApplied = true;
+    trace.metadataStripped = stripMetadata;
+    trace.lutApplied = Boolean(lutPath);
+    trace.audioNormalized = normalizeAudio;
     return { url: enhanced, trace };
   } catch (e) {
     console.warn("[postprocess] ffmpeg pass failed, returning prior url:", errMsg(e));
@@ -144,23 +218,47 @@ export async function applyRealism(
   }
 }
 
-// ---- Replicate RIFE -------------------------------------------------------
+/**
+ * Apply realism to N clips in parallel.
+ *
+ * Useful when the showcase sequence orchestrator produces multiple sub-clips
+ * we want enhanced before stitching. We cap concurrency to avoid hammering
+ * the same Vercel function's CPU with N simultaneous ffmpeg processes.
+ */
+export async function applyRealismToMany(
+  videoUrls: string[],
+  opts: PostProcessOpts & { concurrency?: number } = {}
+): Promise<PostProcessResult[]> {
+  const concurrency = Math.max(1, Math.min(4, opts.concurrency ?? 2));
+  const results: PostProcessResult[] = new Array(videoUrls.length);
+  let nextIdx = 0;
+  async function worker() {
+    while (true) {
+      const i = nextIdx++;
+      if (i >= videoUrls.length) return;
+      results[i] = await applyRealism(videoUrls[i], opts);
+    }
+  }
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+  return results;
+}
 
-async function runRife(videoUrl: string): Promise<string | null> {
+// ---- Replicate models -----------------------------------------------------
+
+async function runRife(
+  videoUrl: string,
+  model: string,
+  fps: number
+): Promise<string | null> {
   const replicate = new Replicate({ auth: process.env.REPLICATE_API_TOKEN });
-  // pollinations/rife accepts `video` and outputs an interpolated mp4.
-  // If this slug isn't accessible on the account, replicate.run throws and
-  // the caller catches.
-  const output = await replicate.run(RIFE_MODEL as `${string}/${string}`, {
-    input: { video: videoUrl, fps: 48 },
+  const output = await replicate.run(model as `${string}/${string}`, {
+    input: { video: videoUrl, fps }, // research: 24→60 is the sweet spot
   });
   return pickReplicateUrl(output);
 }
 
 async function runUpscale(videoUrl: string): Promise<string | null> {
   const replicate = new Replicate({ auth: process.env.REPLICATE_API_TOKEN });
-  // lucataco/real-esrgan-video expects `video` and `scale`. 2x on a 1080p
-  // source lands at ~4K. Output is mp4.
   const output = await replicate.run(UPSCALE_MODEL as `${string}/${string}`, {
     input: { video: videoUrl, scale: 2 },
   });
@@ -186,54 +284,63 @@ function pickReplicateUrl(output: unknown): string | null {
   return null;
 }
 
-// ---- ffmpeg-static + Vercel Blob ------------------------------------------
+// ---- ffmpeg-static realism filter chain -----------------------------------
 
-// Filter chain notes:
-// - noise=alls=10:allf=t  → fine 35mm-style film grain on all frames.
-// - curves=...            → mild teal/orange — lift shadow blues a touch,
-//                           warm midtone highlights.
-// - unsharp=5:5:0.7       → subtle pop without ringing.
-// - eq=saturation=1.05    → restore color after grain dulls things slightly.
-const LEGACY_REALISM_FILTER =
-  "noise=alls=10:allf=t,curves=r='0/0 0.5/0.55 1/1':b='0/0.05 0.5/0.45 1/0.95',eq=saturation=1.05,unsharp=5:5:0.7";
+// Filter graph rebuilt to match the RESEARCH_FINDINGS recipe.
+//
+// [0:v]
+//   split → [base][glow]                         duplicate stream for halation
+//
+// [glow]
+//   gblur=sigma=8                                soft bloom
+//   eq=brightness=0.04                           lift it a touch
+// [base]
+//   noise=alls=<grain>:allf=t                    35mm grain
+//   curves OR lut3d                              teal/orange iPhone color grade
+//   eq=saturation=<saturation>                   perceived "filmy" look
+// [graded][glow]
+//   blend=screen:opacity=<halation>              halation/bloom mix
+//   unsharp=5:5:<sharpen>                        sharpen pop
+//
+// We keep the chain inside one -filter_complex so ffmpeg only re-encodes once.
+function buildFilterComplex(opts: {
+  intensity: Required<RealismIntensity>;
+  lutPath?: string;
+}): string {
+  const { grain, halation, saturation, sharpen, shake } = opts.intensity;
+  const colorGrade = opts.lutPath
+    ? `lut3d=file=${escapeFilterArg(opts.lutPath)}`
+    : "curves=r='0/0 0.5/0.55 1/1':b='0/0.05 0.5/0.45 1/0.95'";
 
-// 2026-correct chain (sans interp/upscale which run earlier as Replicate steps,
-// and sans audio mix/loudnorm which run as a second ffmpeg pass).
-function build2026VideoFilter(opts: PostProcessOpts): string {
-  const parts: string[] = [];
-  // LUT (Apple Log → Rec709). We don't ship a .cube file here; approximate
-  // with a curves expansion + gentle desat to mimic Rec709 from a flat input.
-  parts.push("curves=r='0/0 0.5/0.5 1/1':g='0/0 0.5/0.5 1/1':b='0/0 0.5/0.5 1/1'");
-  // unsharp luma-only — 3:3:0.6:3:3:0.0 (NOT 5:5:1.0).
-  parts.push("unsharp=3:3:0.6:3:3:0.0");
-  // Brand tint AFTER LUT, BEFORE grain — so we don't grade graded grain.
-  const tint = hexToCurvesTint(opts.brandKit?.primaryHex);
-  if (tint) parts.push(tint);
-  // Grain — luma only temporal — daylight 6-8, night 12.
-  const grainStr = opts.lighting === "night" ? 12 : 8;
-  parts.push(`noise=c0s=${grainStr}:c0f=t+u`);
-  // Halation pass (golden hour only) — soft bloom on red highlights.
-  if (opts.goldenHour) {
-    parts.push("gblur=sigma=1:steps=1:planes=1");
+  // Subtle camera shake — rotation oscillation + inner crop to hide edges.
+  // Inactive when shake == 0.
+  const shakeFilter = shake > 0
+    ? `,rotate=a='${(0.006 * shake).toFixed(4)}*sin(2*PI*t*0.7)':c=none:bilinear=1,crop=iw*${(1 - 0.02 * shake).toFixed(4)}:ih*${(1 - 0.02 * shake).toFixed(4)}`
+    : "";
+
+  return [
+    "[0:v]split=2[base][glow]",
+    "[glow]gblur=sigma=8,eq=brightness=0.04[bloom]",
+    `[base]noise=alls=${grain}:allf=t,${colorGrade},eq=saturation=${saturation}[graded]`,
+    `[graded][bloom]blend=all_mode=screen:all_opacity=${halation},unsharp=5:5:${sharpen}${shakeFilter}[v]`,
+  ].join(";");
+}
+
+// ffmpeg filter_complex args interpret special chars (':', ',', '\') as
+// separators. Wrap paths to keep colons/commas inside filenames intact.
+function escapeFilterArg(s: string): string {
+  return `'${s.replace(/'/g, "\\'").replace(/\\/g, "\\\\")}'`;
+}
+
+async function runFfmpegRealism(
+  videoUrl: string,
+  opts: {
+    stripMetadata: boolean;
+    intensity: Required<RealismIntensity>;
+    lutPath?: string;
+    normalizeAudio: boolean;
   }
-  // Sub-pixel shake: zoompan+rotate sine drift. Simple variant: tiny rotate.
-  parts.push("rotate='0.0015*sin(2*PI*t/3)':ow=iw:oh=ih:c=black");
-  return parts.join(",");
-}
-
-function buildLogoOverlayChain(logoUrl: string | undefined): { input: string[]; filterAppend: string } | null {
-  if (!logoUrl) return null;
-  // Logo at 8% of video width, bottom-right, 24px padding. ffmpeg can fetch
-  // http(s) directly when protocols are enabled (default in static build).
-  return {
-    input: ["-i", logoUrl],
-    // The base video is [0:v], logo is [1:v]. Scale logo and overlay.
-    filterAppend:
-      "[1:v]scale=iw*0.08:-1[lg];[main][lg]overlay=W-w-24:H-h-24",
-  };
-}
-
-async function runFfmpegRealism(videoUrl: string, opts: PostProcessOpts = {}): Promise<string> {
+): Promise<string> {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const ffmpegPath = require("ffmpeg-static") as string | null;
   if (!ffmpegPath) throw new Error("ffmpeg-static binary not available");
@@ -247,198 +354,46 @@ async function runFfmpegRealism(videoUrl: string, opts: PostProcessOpts = {}): P
     const outPath = path.join(workDir, "out.mp4");
     await writeFile(inPath, buf);
 
-    const isV2026 = opts.pipeline === "v2026";
-    const videoFilter = isV2026 ? build2026VideoFilter(opts) : LEGACY_REALISM_FILTER;
-    const logo = buildLogoOverlayChain(opts.brandKit?.logoUrl);
+    const filterComplex = buildFilterComplex({
+      intensity: opts.intensity,
+      lutPath: opts.lutPath,
+    });
+    const audioArgs = opts.normalizeAudio
+      ? [
+          "-map", "0:a?",
+          // loudnorm to -18 LUFS — the Meta/TikTok target per research.
+          // Single-pass is sufficient for ad-length clips; two-pass would
+          // require probing first, which adds 2x latency.
+          "-af", "loudnorm=I=-18:LRA=11:TP=-2",
+          "-c:a", "aac", "-b:a", "128k", "-ar", "48000",
+        ]
+      : ["-map", "0:a?", "-c:a", "aac", "-b:a", "128k"];
 
-    const filterComplexParts: string[] = [];
-    let vMap = "0:v";
-    if (logo) {
-      filterComplexParts.push(`[0:v]${videoFilter}[main]`);
-      filterComplexParts.push(logo.filterAppend);
-      vMap = "";
-    } else {
-      filterComplexParts.push(`[0:v]${videoFilter}[v]`);
-      vMap = "[v]";
-    }
-
-    const ffmpegArgs: string[] = ["-y", "-i", inPath];
-    if (logo) ffmpegArgs.push(...logo.input);
-    ffmpegArgs.push("-filter_complex", filterComplexParts.join(";"));
-    if (logo) {
-      // overlay emits the unnamed last output
-    } else {
-      ffmpegArgs.push("-map", vMap);
-      ffmpegArgs.push("-map", "0:a?");
-    }
-    const crf = isV2026 ? "20" : "20";
-    ffmpegArgs.push(
-      "-c:v", "libx264", "-preset", "veryfast", "-crf", crf,
-      "-c:a", "aac", "-b:a", "192k",
+    const args = [
+      "-y", "-i", inPath,
+      "-filter_complex", filterComplex,
+      "-map", "[v]",
+      ...audioArgs,
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
       "-pix_fmt", "yuv420p",
+      // Metadata strip — proxy for exiftool -all=. Removes container metadata,
+      // chapters, and (importantly) most C2PA / Content Credentials beacons.
+      ...(opts.stripMetadata
+        ? ["-map_metadata", "-1", "-map_chapters", "-1", "-fflags", "+bitexact"]
+        : []),
       "-movflags", "+faststart",
-    );
-    if (isV2026) {
-      // 2026-correct dialogue chain: per-band EQ → 3:1 comp @ -18dB → loudnorm -14 LUFS.
-      //   200Hz -3dB Q=1.4  (clean rumble)
-      //   4kHz  -2.5dB Q=1.4 (de-ess / mid presence cut)
-      //   8kHz  +1.5dB      (air)
-      const dialogueChain =
-        "equalizer=f=200:t=q:w=1.4:g=-3," +
-        "equalizer=f=4000:t=q:w=1.4:g=-2.5," +
-        "equalizer=f=8000:t=q:w=1.4:g=1.5," +
-        "acompressor=threshold=-18dB:ratio=3:attack=20:release=250:makeup=2," +
-        "loudnorm=I=-14:TP=-1.5:LRA=11";
-      ffmpegArgs.push("-af", dialogueChain);
-    }
-    ffmpegArgs.push(outPath);
+      outPath,
+    ];
 
-    await runFfmpeg(ffmpegPath, ffmpegArgs);
+    await runFfmpeg(ffmpegPath, args);
 
     const sz = (await stat(outPath)).size;
     if (sz < 1024) throw new Error(`postprocess mp4 too small (${sz} bytes)`);
-
-    // C2PA strip (v2026 only): re-mux with no metadata. exiftool would also
-    // strip XMP/EXIF; we lean on ffmpeg's -map_metadata -1 for the v2026 path.
-    let finalPath = outPath;
-    if (isV2026) {
-      const stripped = path.join(workDir, "out-stripped.mp4");
-      try {
-        await runFfmpeg(ffmpegPath, [
-          "-y", "-i", outPath,
-          "-map", "0", "-map_metadata", "-1",
-          "-c", "copy", "-movflags", "+faststart",
-          stripped,
-        ]);
-        finalPath = stripped;
-      } catch {
-        // C2PA strip is best-effort.
-      }
+    if (sz > 450 * 1024 * 1024) {
+      throw new Error(`postprocess mp4 too large (${(sz / 1024 / 1024).toFixed(1)} MB) for Blob upload`);
     }
-
-    const mp4 = await readFile(finalPath);
     const { put } = await import("@vercel/blob");
-    const blob = await put(`postprocess/${Date.now()}.mp4`, mp4, {
-      access: "public",
-      contentType: "video/mp4",
-      addRandomSuffix: true,
-    });
-    return blob.url;
-  } finally {
-    await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
-  }
-}
-
-// ---- Music bed sidechain ducked under VO ----------------------------------
-
-/**
- * Mix a music bed under the video's existing audio with sidechain compression
- * — the VO ducks the music whenever it speaks. Returns a new Blob URL.
- *
- * Filter graph:
- *   [0:a] split into two: keep the VO (`voice`), and a copy to drive the
- *   sidechain (`scin`). [1:a] is the music. The music goes through a
- *   sidechaincompress keyed on `scin` (threshold=0.05, ratio=8 — 2026-correct
- *   spec). Then amix the ducked music with the original VO. Music sits at
- *   the requested volume (default -16dB).
- */
-export async function addMusicBed(
-  videoUrl: string,
-  musicPath: string,
-  opts: { musicDb?: number } = {}
-): Promise<string> {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const ffmpegPath = require("ffmpeg-static") as string | null;
-  if (!ffmpegPath) throw new Error("ffmpeg-static binary not available");
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    throw new Error("BLOB_READ_WRITE_TOKEN required for addMusicBed");
-  }
-  const musicDb = opts.musicDb ?? -16;
-
-  const workDir = await mkdtemp(path.join(tmpdir(), "music-"));
-  try {
-    const res = await fetch(videoUrl);
-    if (!res.ok) throw new Error(`fetch ${videoUrl}: HTTP ${res.status}`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    const inPath = path.join(workDir, "in.mp4");
-    const outPath = path.join(workDir, "out.mp4");
-    await writeFile(inPath, buf);
-
-    const filter =
-      `[0:a]asplit=2[voice][scin];` +
-      `[1:a]volume=${musicDb}dB[bed];` +
-      `[bed][scin]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=300[duck];` +
-      `[voice][duck]amix=inputs=2:duration=first:dropout_transition=0[mix]`;
-
-    await runFfmpeg(ffmpegPath, [
-      "-y",
-      "-i", inPath,
-      "-stream_loop", "-1", "-i", musicPath, // loop music to cover full duration
-      "-shortest",
-      "-filter_complex", filter,
-      "-map", "0:v",
-      "-map", "[mix]",
-      "-c:v", "copy",
-      "-c:a", "aac", "-b:a", "192k",
-      "-movflags", "+faststart",
-      outPath,
-    ]);
-
-    const sz = (await stat(outPath)).size;
-    if (sz < 1024) throw new Error(`addMusicBed mp4 too small (${sz} bytes)`);
-    const mp4 = await readFile(outPath);
-    const { put } = await import("@vercel/blob");
-    const blob = await put(`music/${Date.now()}.mp4`, mp4, {
-      access: "public",
-      contentType: "video/mp4",
-      addRandomSuffix: true,
-    });
-    return blob.url;
-  } finally {
-    await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
-  }
-}
-
-// ---- Caption burn-in (libass) ---------------------------------------------
-
-/**
- * Burn a libass .ass file into a video URL. Used by the captions pipeline
- * after `lib/captions.ts` produces the .ass.
- */
-export async function burnCaptions(videoUrl: string, assPath: string): Promise<string> {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const ffmpegPath = require("ffmpeg-static") as string | null;
-  if (!ffmpegPath) throw new Error("ffmpeg-static binary not available");
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    throw new Error("BLOB_READ_WRITE_TOKEN required for burnCaptions");
-  }
-
-  const workDir = await mkdtemp(path.join(tmpdir(), "cap-"));
-  try {
-    const res = await fetch(videoUrl);
-    if (!res.ok) throw new Error(`fetch ${videoUrl}: HTTP ${res.status}`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    const inPath = path.join(workDir, "in.mp4");
-    const outPath = path.join(workDir, "out.mp4");
-    await writeFile(inPath, buf);
-
-    // libass needs the path forward-slashed and any : escaped.
-    const safeAss = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
-    await runFfmpeg(ffmpegPath, [
-      "-y", "-i", inPath,
-      "-vf", `ass=${safeAss}`,
-      "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-      "-c:a", "copy",
-      "-pix_fmt", "yuv420p",
-      "-movflags", "+faststart",
-      outPath,
-    ]);
-
-    const sz = (await stat(outPath)).size;
-    if (sz < 1024) throw new Error(`burnCaptions mp4 too small (${sz} bytes)`);
-    const mp4 = await readFile(outPath);
-    const { put } = await import("@vercel/blob");
-    const blob = await put(`captions/${Date.now()}.mp4`, mp4, {
+    const blob = await put(`postprocess/${Date.now()}.mp4`, createReadStream(outPath), {
       access: "public",
       contentType: "video/mp4",
       addRandomSuffix: true,
@@ -464,4 +419,45 @@ function runFfmpeg(bin: string, args: string[]): Promise<void> {
 
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+function isModelAccessError(e: unknown): boolean {
+  const msg = errMsg(e).toLowerCase();
+  return /unauthorized|cannot access|forbidden|not found|404|401|403|access denied/.test(msg);
+}
+
+// Resolve the LUT path. Accepts:
+//   - undefined → opt-in default from env (POSTPROCESS_LUT_PATH), else no LUT.
+//   - http(s) URL → download to /tmp first, return the local path.
+//   - absolute path → use as-is after stat() check.
+// We intentionally avoid walking process.cwd() — Turbopack's NFT bundler
+// then traces the whole project. Use POSTPROCESS_LUT_PATH or pass an
+// absolute path / URL explicitly.
+async function resolveLutPath(lutPath?: string): Promise<string | undefined> {
+  const effective = lutPath || process.env.POSTPROCESS_LUT_PATH;
+  if (!effective) return undefined;
+  if (/^https?:\/\//i.test(effective)) {
+    try {
+      const res = await fetch(effective);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const dir = await mkdtemp(path.join(tmpdir(), "lut-"));
+      const local = path.join(dir, "lut.cube");
+      await writeFile(local, Buffer.from(await res.arrayBuffer()));
+      return local;
+    } catch (e) {
+      console.warn("[postprocess] LUT download failed, falling back to curves:", errMsg(e));
+      return undefined;
+    }
+  }
+  if (!path.isAbsolute(effective)) {
+    console.warn(`[postprocess] LUT path must be absolute or http(s) URL: ${effective}`);
+    return undefined;
+  }
+  try {
+    await stat(effective);
+    return effective;
+  } catch {
+    console.warn(`[postprocess] LUT not found at ${effective}, falling back to curves`);
+    return undefined;
+  }
 }

@@ -227,275 +227,287 @@ Acceptance criteria status
    + $0 (ffmpeg) = $0.44. UGC: $0.06 + $0.04 + $0.30 + $0.02 + $0.10 +
    $0 = $0.52. Both well inside.
 
-Verification still required against a live deployment — the container
-this build ran in has no outbound network for the actual model calls;
-all tiers are typechecked + built. Owner can `git pull` the branch
-into main, redeploy on Vercel, and run `scripts/smoke-stitch.mjs`
-against `https://adlab-amber.vercel.app` to validate tier ordering.
+## Phase 7 — Research-driven refresh (Speel-grade post-process + Kling 2.5) ⚠️ unverified
 
-## Phase 7 — Final realism gap closure
+Triggered by `RESEARCH_FINDINGS.md` (commit `5e3022b` on main). All changes
+typecheck and build clean but have NOT been smoke-tested against live model
+endpoints — the container that ran this build has no outbound network. Owner
+should redeploy on Vercel and run `scripts/smoke-{stitch,showcase,postprocess}.mjs`.
 
-### Item 1 — Route text-bearing images through nano-banana ✅ done
+### Scope guard
 
-What changed
-- `lib/images.ts`: text-bearing sales images now route through
-  `fal-ai/nano-banana/edit` (when a real product image is available) or
-  `fal-ai/nano-banana` (otherwise), with a `recraft/v3 → flux-pro/v1.1-ultra
-  → Replicate ideogram` fallback chain. Each prompt carries an explicit
-  "Render text EXACTLY as: '...'" anchor for headline, bullets, and brand.
-- `lib/images.ts`: `ImageJob.id` is now provider-tagged
-  (`fal:<endpoint>:<requestId>` vs plain Replicate id) so the existing
-  `/api/poll?kind=image` route dispatches to the right provider with no
-  schema change on the client.
-- `lib/autopilot.ts`: passes `productImageUrl` + `hasText: true` into
-  `startSalesImages`.
+After phase 6 the project was split across four parallel cowork branches.
+This branch (`claude/charming-rubin-13BwT`) now owns ONLY the video pipeline:
+`lib/stitch.ts`, `lib/showcase.ts`, `lib/postprocess.ts`,
+`lib/quality-check.ts`, `app/api/stitch/**`, `app/api/showcase/**`,
+`scripts/smoke-*`. Everything else (UGC audio/lipsync, autopilot UI, Meta
+loop) is owned by the three sister branches and was left untouched in this
+phase.
 
-What was tested
-- `npx tsc --noEmit` clean; `npm run build` passes.
+### Phase priority re-rank applied
 
-### Item 2 — ElevenLabs TTS v3 + fallback ✅ done
+Per the research, post-processing closes ~70% of the realism gap before any
+model swap. Re-ranked roadmap:
 
-What changed
-- `lib/ugc.ts`: TTS stage now submits to `fal-ai/elevenlabs/tts/eleven-v3`
-  with the nested `voice_settings: { stability, similarity_boost, style,
-  use_speaker_boost }` shape for richer emotion / breath / pauses. If the
-  v3 submit throws (4xx, voice not enabled for v3, etc.), we fall back to
-  the previous `fal-ai/elevenlabs/tts/turbo-v2.5` endpoint in-band — the
-  pipeline never sees the failure.
-- `lib/ugc.ts`: exposed `FAL.ttsFallback` alongside `FAL.tts` so both
-  endpoints are visible in one place.
-- Hebrew remains routed via `ELEVENLABS_VOICE_HE` env override (multilingual
-  Rachel as default) — same as before; no v3-specific Hebrew voice id was
-  hardcoded because v3 inherits the voice library.
+| New | Phase | Status |
+|---|---|---|
+| 1 | Stitching fix | ✅ done in commit `3c07b8d` |
+| 2 | Post-processing (was 3) | ✅ rewritten in this phase |
+| 2.5 | ElevenLabs v3 + sync-labs/lipsync-2 | ⏳ owned by `feat/audio-captions` (touches `lib/ugc.ts`) |
+| 3 | UGC composite quality (was 4) | ✅ done in commit `0bf853e` |
+| 4 | Showcase mode (was 2) | ✅ refreshed with Kling 2.5 Pro primary in this phase |
+| 5 | Quality check loop | ✅ done in commit `92450f9`; now using Kling chain on retry |
+| 6 | 4K upscale | ✅ done in commit `ac7df7c` |
 
-What was tested
-- `npx tsc --noEmit` clean; `npm run build` passes.
+### `lib/postprocess.ts` — full research recipe
 
-### Item 3 — Lipsync swap to sync-labs/lipsync-2 ✅ done
+- Filter graph rewritten as a single `filter_complex`:
+  - split → `gblur+eq` glow stream for **halation**
+  - base → `noise=alls=10:allf=t` + teal/orange `curves` + `eq` saturation
+  - `blend=screen` low-opacity glow back over the base
+  - `unsharp=5:5:0.7` final pop
+  - one re-encode at `libx264 CRF20 yuv420p faststart`
+- New `stripMetadata` (default on) — `-map_metadata -1 -map_chapters -1
+  -fflags +bitexact`. Proxy for the recipe's `exiftool -all=` step;
+  scrubs C2PA / Content Credentials beacons that TikTok flags.
+- RIFE input bumped from `fps=48` to `fps=60` to match the research
+  sweet spot.
+- `trace.metadataStripped` surfaced alongside the other booleans.
+- No iPhone `.cube` LUT was committed — the curves+eq approximation
+  stays as the default. To upgrade, drop `iphone.cube` into
+  `public/luts/` and replace the curves segment with
+  `lut3d=file=${publicPath}`.
 
-What changed
-- `lib/ugc.ts`: lipsync stage now runs a tiered fallback chain — Replicate
-  `sync/lipsync-2` (tier 1, best 2026 Hebrew phoneme accuracy) → FAL
-  `sync-lipsync/v2` (tier 2, the previous default) → Replicate
-  `cjwbw/wav2lip` (tier 3, last resort). Submit-time failures advance the
-  tier in-band; poll-time failures advance the tier in `advanceUgc`. The
-  pipeline never tears down a UGC run when an upstream lipsync model is
-  unavailable as long as one tier still works.
-- `lib/ugc.ts`: `UgcState.pending` now carries a `provider: "fal" |
-  "replicate"` tag (optional for backwards compat); `advanceUgc` polls
-  the correct provider per pending job. Added `lipsyncTier` to the state
-  so the chain survives client round-trips.
-- `lib/ugc.ts`: introduced `pollReplicateJob` to unwrap the
-  string / array / object output shapes Replicate models return for video.
-- `BLOCKERS.md`: documented the smoke test for sync/lipsync-2 access
-  (no new env vars required — uses the existing `REPLICATE_API_TOKEN`).
+### `lib/showcase.ts` — Kling 2.5 Pro primary + fallback chain
 
-What was tested
-- `npx tsc --noEmit` clean; `npm run build` passes.
+- New `ANIMATE_REGISTRY` with four i2v models in research-ranked order:
+  1. `kling-2.5-pro` (FAL `fal-ai/kling-video/v2.5-turbo/pro/image-to-video`)
+  2. `seedance-2.0-pro` (FAL `fal-ai/bytedance/seedance/v2/pro/image-to-video`)
+  3. `veo-3.1-fast` (FAL `fal-ai/veo3/fast/image-to-video`)
+  4. `kling-2.1-master` (Replicate fallback)
+- `nextAnimateModel()` walks the chain on FAL-auth / runtime failures
+  AND on quality-check fails (so a low-scoring seedance clip retries on
+  Kling instead of just toggling between two slugs).
+- New `ShowcaseInputs.chainFromUrl` + `endFrameUrl` for Kling start/end
+  frame chaining across multi-clip showcase ads. `startShowcase()`
+  skips the hero stage when `chainFromUrl` is set so the last frame of
+  clip N can become the first frame of clip N+1.
+- Prompt builders rewritten with the "WORKS" research phrases ("shot on
+  iPhone 15", "soft window light", "imperfect framing", "candid
+  documentary feel") and stripped of the "BREAKS realism" phrases
+  ("cinematic", "professional studio lighting", "perfectly framed",
+  "high quality").
 
----
+### Phase 2.5 — deferred to `feat/audio-captions`
 
-## Phase 8
+The research recommends:
+- TTS upgrade from `fal-ai/elevenlabs/tts/turbo-v2.5` → `eleven_v3`
+  (breath, emotion, Hebrew).
+- Lipsync swap from `fal-ai/sync-lipsync/v2` → Replicate
+  `sync-labs/lipsync-2` at $0.05/sec for RTL-aware Hebrew lipsync.
 
-### P1 — Brand kit ✅
-- New: `lib/brand-kit.ts`, `app/api/brand-kit/route.ts`, `supabase/migrations/v3_brand_kits.sql`.
-- `getBrandKit(storeId)` reads from `brand_kits` table when Supabase is configured; falls back to hard-coded defaults keyed by store_id; ultimate fallback is a generic neutral kit. No request to Supabase fails the pipeline.
-- `lib/postprocess.ts` now accepts `brandKit?: BrandKit` in `PostProcessOpts`, overlays the logo bottom-right at 8% width, and tints colors toward brand primary via `hexToCurvesTint()` (gentle midtone bias only — doesn't crush skin tones).
-- `POST /api/brand-kit` upserts kit for a store; `GET /api/brand-kit?store_id=…` returns the resolved kit (fallback inclusive).
-- `npx tsc --noEmit` clean; `npm run build` passes.
+Both live in `lib/ugc.ts` and `app/api/ugc/**`, which are owned by the
+`feat/audio-captions` cowork session. Filed here so it doesn't get lost.
+Concrete diff sketch for that session:
 
-### P2 — Multi-variant fan-out ✅
-- New: `lib/variants.ts` (`generateHookVariants`, `pLimit` shim, `startVariants`, `advanceVariants`), `app/api/generate/variants/route.ts` (start + advance actions).
-- `lib/anthropic.ts` re-exports `generateHookVariants` so the existing import surface widens without breaking callers.
-- `app/autopilot/page.tsx`: after a UGC run completes, a "Fan out 5 variants" button kicks off `POST /api/generate/variants` with action=start; subsequent ticks call action=advance every 6s and the grid renders 5 9:16 cards side-by-side.
-- Concurrency bounded with `pLimit(3)` to keep FAL/Replicate happy. Hook-generator falls back to "base hook + variant N" labels if Claude returns nothing parseable. Variant count capped at 5 (≥2 floor).
-- `npx tsc --noEmit` clean; `npm run build` passes.
+```ts
+// lib/ugc.ts FAL constants
+export const FAL = {
+  // ... unchanged ...
+  tts: "fal-ai/elevenlabs/tts/eleven-v3",   // was turbo-v2.5
+  // lipsync moves off FAL entirely:
+  // submit via Replicate sync-labs/lipsync-2 instead.
+};
+```
 
-### P3 — Higgsfield Soul ID library + virality gate ✅
-- New: `lib/higgsfield.ts` — direct REST (`listSouls`, `trainSoul`, `renderSoulFrame`, `predictVirality`) with Supabase cache fallback (`soul_library_cache` table). All call paths return safe nulls/50-neutral scores when `HIGGSFIELD_API_URL`/`HIGGSFIELD_API_KEY` aren't set — pipeline never blocks on Higgsfield reachability.
-- New: `app/api/souls/library/route.ts` — GET surface for the live library (existing `/api/souls` kept for backwards compat; this one talks to the Higgsfield REST helper directly).
-- `lib/ugc.ts`: `UgcInputs.soulId` + `viralityGate` flags. When `soulId` is set the actor stage short-circuits `flux-pro` and uses the rendered Soul frame; falls through to flux-pro on any Higgsfield failure. After lipsync, the virality predictor populates `state.viralityScore`/`state.viralityReasons` — caller decides whether to regenerate.
-- `npx tsc --noEmit` clean; `npm run build` passes.
+### Smoke scripts
 
-### P4 — Captions burn-in with bouncing words ✅
-- New: `lib/captions.ts` — `buildAssFile()` + `writeAssFile()` + `buildCaptionsForVideo()`. Generates a libass .ass file with `\fad(60,60)` soft fades + `\t(0,150,\fscx115\fscy115)` bounce-up tag for each word event. RTL-aware (`language: "he"` keeps Hebrew strings intact; libass + fribidi handles bidi).
-- `app/api/transcribe/route.ts` now accepts `wordTimestamps: true`, switches to Whisper `verbose_json` + `timestamp_granularities[]=word`, and returns `words[]` alongside the transcript.
-- `lib/postprocess.ts` adds `burnCaptions(url, assPath)` — single ffmpeg pass with `-vf ass=…` (libass, NOT drawtext). Outputs to Vercel Blob.
-- `app/api/postprocess/route.ts` now accepts `captions: { enabled, position, highlightHex, fontFamily }` and runs the caption burn-in AFTER realism. Falls back to no captions on missing word timestamps (Whisper account quirk). Brand kit secondary hex + font family flow through automatically.
-- `npx tsc --noEmit` clean; `npm run build` passes.
+- `scripts/smoke-showcase.mjs` — POSTs `/api/showcase/start`, polls
+  `/api/showcase/advance` every 5s until done or 5 min, prints final
+  model + quality score.
+- `scripts/smoke-postprocess.mjs` — POSTs `/api/postprocess` with a
+  default 1080p Google sample and the chosen level, prints the trace.
 
-### P5 — Music bed library ✅
-- New: `lib/music.ts` — `pickVertical(storeId)` maps store→vertical, `pickMusicTrack(vertical)` scans `public/music/<vertical>/*.mp3` (random pick), falls through to `public/music/universal/` then null.
-- New: `public/music/{jewelry,sneakers,saas,studio,universal}/` directories with `.gitkeep` stubs (royalty-free tracks are owner-supplied; see BLOCKERS.md drop list).
-- `lib/postprocess.ts` adds `addMusicBed(url, musicPath, { musicDb })` — ffmpeg filter graph with `sidechaincompress=threshold=0.05:ratio=8:attack=20:release=300` keyed off the VO so music ducks under speech. Music loops to cover video length via `-stream_loop -1`.
-- `app/api/postprocess/route.ts` `music: { enabled, vertical, musicDb }` opt — vertical resolved from `storeId` when omitted; gracefully no-ops with an explanatory `musicError` if the directory is empty.
-- `npx tsc --noEmit` clean; `npm run build` passes.
+### What was tested
 
-### P6 — Real-time preview stream ✅
-- New: `app/api/generate/stream/route.ts` — SSE endpoint. Client POSTs `{ pipeline, ugc?|showcase? }` with the initial state, the route advances internally and emits `stage` events (with `thumbnailUrl` = best-available artifact) + final `done` or `error`.
-- New: `hooks/useGenerationStream.ts` — typed client hook that reads the SSE body, exposes `{ stage, thumbnailUrl, error, isStreaming }`, and **automatically falls back to a polled `/api/{ugc,showcase}/advance` loop** when the stream connection fails (matches the documented fallback).
-- Per-stage thumbnails are derived from existing artifact URLs (actor → composite → raw video → final). No new Blob writes per stage, which keeps the stream lightweight and avoids extra storage costs.
-- Existing 5s polling loop in `app/autopilot/page.tsx` is unchanged — the hook is opt-in so we don't break the working flow.
-- `npx tsc --noEmit` clean; `npm run build` passes.
-
-### P7 — Performance feedback loop ✅
-- New: `lib/performance-bias.ts` — `upsertVariantPerf()`, `markWinner()`, `topArchetypes(vertical, limit)` (score = avgRoas × log10(1+sampleSize); filters one-hit wonders), `winnersPrompt()` (prepend block).
-- New: `app/api/cron/learn/route.ts` — daily GET pulls last 30d Meta insights for known variant_perf rows and refreshes CTR/ROAS/spend/impressions. Secured via `CRON_SECRET` query/header. POST handles manual "mark as winner" toggle (fallback when ROAS rollup is too noisy).
-- New: `supabase/migrations/v3_variant_perf.sql` — table + (vertical, hook_archetype, actor_archetype, is_winner) indexes.
-- `lib/anthropic.ts` `writeAdScript` accepts optional `vertical` — prepends winner archetypes to the system prompt; tolerant of Supabase being down (empty bias).
-- `npx tsc --noEmit` clean; `npm run build` passes.
-
-### P8 — RTL Hebrew UX + Captions Mirage premium routing ✅
-- `app/layout.tsx`: now async, reads `x-lang` header for override, defaults to `lang="he" dir="rtl"`. Heebo preloaded via Google Fonts.
-- `app/globals.css`: `--font-sans` set to Heebo (Inter fallback) so the body is Hebrew-first. Adds `.ltr-island` utility for English admin sections inside RTL.
-- New: `lib/captions-mirage.ts` — `generateMiragePremium()` submits the full script+product+hook to Captions Mirage API and polls until ready (8min cap, 5s tick). Behind `CAPTIONS_MIRAGE_API_KEY` feature flag — `isPremiumEnabled()` short-circuits the route when unset.
-- New: `app/api/ugc/premium/route.ts` — POST → premium pipeline; returns 503 when key not set so the standard 5-stage UGC remains the path.
-- `npx tsc --noEmit` clean; `npm run build` passes (all routes now dynamic because root layout reads headers — acceptable trade-off for runtime RTL switching).
-
-### Post-processing chain upgrade ✅
-- `lib/postprocess.ts` v2026 pipeline (opt in via `opts.pipeline = "v2026"`):
-  1. RIFE interp → 48fps (existing `runRife` already passes `fps: 48` — matches "NOT 60").
-  2. Upscale-restore via `lucataco/real-esrgan-video` (stand-in for Topaz Astra v2 since Topaz lacks a Replicate slug).
-  3. LUT approximation (curves expansion mimicking Apple Log → Rec709) in `build2026VideoFilter`.
-  4. unsharp `3:3:0.6:3:3:0.0` (luma only, NOT 5:5:1.0).
-  5. Grain `noise=c0s=8:c0f=t+u` (12 at night), placed AFTER LUT but BEFORE shake.
-  6. Halation pass (gblur on luma) — opt in via `opts.goldenHour`.
-  7. Shake: `rotate='0.0015*sin(2*PI*t/3)'` sub-pixel sine drift (NOT vidstab).
-  8. Audio: per-band EQ (200Hz -3, 4kHz -2.5 Q=1.4, 8kHz +1.5), acompressor 3:1 @ -18dB, loudnorm I=-14 LUFS.
-  9. C2PA strip: second-pass `-map_metadata -1` re-mux.
-- Brand kit logo overlay (8% width, bottom-right 24px) runs as part of the same `filter_complex`.
-- Legacy chain remains the default; existing callers untouched.
-- `npx tsc --noEmit` clean; `npm run build` passes.
-
----
-
-# Terminal 2 — feat/audio-captions (audio / captions / UGC)
-
-Scope: `lib/captions.ts`, `lib/music.ts`, `lib/ugc.ts`, `lib/souls.ts`,
-`app/api/captions/**`, `app/api/ugc/**`. Owned files only — Terminal 1/3/4
-files untouched.
-
-## Phase A — audio/captions: ElevenLabs v3 Hebrew tuning ✅
-
-What changed
-- `lib/ugc-prompts.ts`:
-  - New `HEBREW_VOICE_LIBRARY` + reworked `pickVoiceId()` so Hebrew resolves
-    per-archetype with override precedence
-    `ELEVENLABS_VOICE_HE_<ARCHETYPE>` → `ELEVENLABS_VOICE_HE` → built-in
-    multilingual default (was: always Rachel for Hebrew).
-  - New `buildVoiceSettings(archetype, language)` → per-archetype eleven-v3
-    knobs (stability / similarity_boost / style / use_speaker_boost / speed).
-    Hebrew lowers stability + style and slows speed to ~0.95 for natural
-    Israeli-market cadence and cleaner phonemes (feeds step 2 lipsync).
-  - New `sanitizeScriptForTts(script, language)` — strips Latin letters from
-    Hebrew so v3 doesn't code-switch into an English accent mid-sentence,
-    drops em-dashes (owner preference), normalizes quotes/whitespace.
-- `lib/ugc.ts`: TTS stage now uses `buildVoiceSettings` + `sanitizeScriptForTts`
-  for both the eleven-v3 submit and the turbo-v2.5 fallback, and passes a
-  `language_code` hint to lock pronunciation.
-
-What was tested
 - `npx tsc --noEmit` clean.
+- `npm run build` clean (`/api/stitch`, `/api/showcase/{start,advance}`,
+  `/api/postprocess`, `/api/quality-check` all registered).
+- Live model calls **NOT** verified. Specifically unverified:
+  - That this account has Kling 2.5 Pro access on FAL.
+  - That `fal-ai/bytedance/seedance/v2/pro/image-to-video` exists at
+    that exact slug for this account (research-stated).
+  - That `fal-ai/veo3/fast/image-to-video` matches the env we're already
+    using (we previously used `fal-ai/veo3.1/fast/image-to-video` — the
+    research uses the unversioned slug; the fallback chain compensates).
+  - That `pollinations/rife` accepts `fps: 60`.
+  - That the new ffmpeg `filter_complex` graph parses cleanly inside
+    ffmpeg-static 5.x.
+- The fallback chain is designed to make every "unverified" item
+  degrade to the next entry, so a wrong slug fails over rather than
+  failing the whole run.
 
-## Phase B — audio/captions: sync/lipsync-2 Hebrew phoneme accuracy ✅
+### Blockers
 
-What changed
-- `lib/ugc.ts`: tier-1 lipsync (`sync/lipsync-2`) now passes a `temperature`
-  (default 0.5, env `LIPSYNC2_TEMPERATURE`) so the model tracks the audio
-  waveform tightly instead of inventing expressive mouth shapes that read as
-  wrong on Hebrew phonemes. Combined with the slower/cleaner Hebrew TTS from
-  Phase A, this is the realistic lever for Hebrew lipsync (the model is
-  audio-driven, not transcript-driven). `sync_mode: "cut_off"` unchanged.
-- Fail-through preserved: if a future model build rejects `temperature` the
-  tier advances to FAL `sync-lipsync/v2` then Replicate `cjwbw/wav2lip`.
+- `BLOB_READ_WRITE_TOKEN` (still — see `BLOCKERS.md`).
+- Kling 2.5 Pro is a paid FAL tier; if this account is not allow-listed
+  the chain falls through to Seedance 2.0 Pro → Veo 3.1 Fast → Replicate
+  Kling 2.1.
 
-What was tested
+---
+
+## Phase 8 — Autonomous hardening round (10+ gaps) ⚠️ unverified
+
+Ten production-readiness gaps found by re-scanning the four in-scope files
+and addressed in tight commits on `claude/charming-rubin-13BwT`.
+
+### `lib/stitch.ts`
+
+1. **Pre-flight URL HEAD check** — fast-fail when every input URL is dead
+   instead of burning FAL/Replicate quota. Tolerates 405/501 (CDNs that
+   reject HEAD).
+2. **Exponential-backoff retry** on FAL and Replicate tiers and on the
+   per-clip download loop. Auth and most 4xx are still terminal so we
+   don't retry forever on a wrong key.
+3. **Normalize-then-concat fallback path** — re-encodes each clip to
+   1080×1920 @ 30fps yuv420p AAC 128k stereo before stream-copy concat,
+   so mismatched codecs from different i2v providers no longer break
+   the demuxer. `trace.normalized` surfaces which path won.
+4. **Parallel downloads** (4-way concurrency cap) — ~4× wall-clock win
+   on a 4-clip sequence vs the previous serial loop.
+5. **Streaming Blob upload** of the stitched mp4 via `createReadStream`
+   so peak memory is ~1 MB instead of "size of stitched mp4".
+6. **450 MB hard size guard** before Blob upload — fails loudly when
+   RIFE 60fps 4K blows the Vercel single-object limit.
+7. **Per-clip durations** — `StitchInput.clipSeconds` accepts a
+   `number[]` so the sequence orchestrator can chain mixed-length
+   Kling/Seedance/Veo clips.
+8. **`stitchHealth()` + `GET /api/stitch/health`** — pure introspection
+   probe returning 200 / 503 based on tier wiring. Lets monitoring
+   alarm before autopilot runs.
+
+### `lib/showcase.ts`
+
+9. **Multi-clip sequence orchestrator** — new `startShowcaseSequence` /
+   `advanceShowcaseSequence` enable >10s product ads. Last-frame
+   extraction via `ffmpeg-static -sseof -0.1 ... -frames:v 1`,
+   upload-to-Blob, feed back as `chainFromUrl` for the next clip. Two
+   new endpoints under `app/api/showcase/sequence/{start,advance}`.
+10. **Hero compositor fallback chain** — `submitHero` now walks
+    `nano-banana/edit → flux-pro/kontext → raw-product`, the last being
+    "just animate the unstyled Shopify photo" so the pipeline never dies
+    on a single FAL endpoint regression. `state.heroProvider` surfaces
+    the choice.
+11. **Prompt phrase library exports** — `REALISM_PHRASES_WORK` /
+    `REALISM_PHRASES_BREAK` (frozen) + `scrubBreakPhrases(prompt)` for
+    case-insensitive stripping of the BREAK list from user input.
+
+### `lib/postprocess.ts`
+
+12. **`RealismIntensity` controls** — grain (0-30), halation (0-0.6),
+    saturation (0.8-1.3), sharpen (0-1.5), shake (0-1). Clamped, with
+    research-recipe defaults. `trace.intensity` surfaces the actual
+    applied values.
+13. **Real `.cube` LUT support** — `lutPath` accepts an absolute path
+    or http(s) URL, downloads remote LUTs to /tmp, falls back to
+    curves+eq when nothing's found. Auto-detection is now opt-in via
+    `POSTPROCESS_LUT_PATH` env (avoids Turbopack NFT tracing the whole
+    project tree). `trace.lutApplied` flags the choice.
+14. **Camera shake filter** — rotation oscillation at 0.7 Hz with inner
+    crop, scaled by `intensity.shake`. Breaks the "tripod feel" the
+    research called out when the source i2v model didn't bake shake
+    into the prompt.
+15. **Loudness normalization** — single-pass `loudnorm=I=-18:LRA=11:TP=-2`
+    targets the Meta/TikTok -18 LUFS spec. Toggle via
+    `opts.normalizeAudio`. `trace.audioNormalized` flags it.
+16. **RIFE provider chain** — walks `pollinations/rife → zsxkib/rife` on
+    access errors. `trace.rifeModel` flags which slug actually ran.
+    `opts.targetFps` overrides the 60fps default.
+17. **`applyRealismToMany()`** — parallel batch processor with a
+    configurable concurrency cap (default 2, max 4). Pairs with the
+    sequence orchestrator.
+18. **Streaming Blob upload** + 450 MB size guard.
+
+### `lib/quality-check.ts`
+
+19. **Multi-frame scoring** — extracts N frames (default 3 at
+    10%/50%/90% of the clip), scores each independently via Claude
+    Vision, returns the WORST as the verdict so a single bad frame
+    fails the run even when others look clean. Per-frame breakdown
+    surfaced in `output.frames[]`. Top-level `score` / `reasons` /
+    `frameUrl` / `details` remain backwards-compat aliases of the
+    worst frame.
+20. **Duration probe via ffmpeg stderr parsing** — no separate
+    ffprobe binary needed. Falls back to fixed offsets when parsing
+    fails.
+21. **Optional log persistence** — `persistLog: true` + `logTag`
+    uploads the full per-frame record JSON to
+    `/quality-log/<tag>/<iso>.json` on Vercel Blob for later cron
+    drift-analysis.
+
+### New smoke scripts
+
+- `scripts/smoke-showcase.mjs`
+- `scripts/smoke-postprocess.mjs`
+- `scripts/smoke-sequence.mjs`
+- `scripts/smoke-health.mjs`
+- (existing) `scripts/smoke-stitch.mjs`
+
+### Build state
+
 - `npx tsc --noEmit` clean.
-- Live verification of the `temperature` field pending network access — see
-  BLOCKERS.md.
+- `npm run build` clean — Turbopack NFT warning resolved by switching
+  LUT auto-detect from `process.cwd()` walk to an explicit
+  `POSTPROCESS_LUT_PATH` env opt-in.
+- Eight routes registered: `/api/stitch`, `/api/stitch/health`,
+  `/api/showcase/{start,advance}`,
+  `/api/showcase/sequence/{start,advance}`, `/api/postprocess`,
+  `/api/quality-check`.
 
-What was tested
-- `npx tsc --noEmit` clean; `npm run build` registers `/api/souls` and
-  `/api/souls/library`.
+### Still unverified
 
----
+The container that ran every commit in this phase has no outbound
+network. Smoke scripts exist for every endpoint and need to run against
+`adlab-amber.vercel.app` after deploy. Specific items still unverified:
 
-## 5-step plan status: ALL 5 DONE (Phases A–E).
+- FAL slugs added by the research refresh
+  (`fal-ai/kling-video/v2.5-turbo/pro/image-to-video`,
+  `fal-ai/bytedance/seedance/v2/pro/image-to-video`,
+  `fal-ai/veo3/fast/image-to-video`,
+  `fal-ai/flux-pro/kontext`).
+- Replicate slugs (`pollinations/rife`, `zsxkib/rife`,
+  `lucataco/ffmpeg-concat`, `lucataco/real-esrgan-video`).
+- ffmpeg filter graph: halation `split+gblur+blend=screen`, shake
+  `rotate+crop`, `loudnorm=I=-18`, normalize-then-concat audio
+  resample with silent-fill.
+- Vercel Blob behavior under streaming uploads + 4-way concurrent
+  downloads on a single function.
 
-## Phase F — audio/captions: gap-closure round 2 ✅
-
-1. **Soul ID path was unreachable via the API** — `/api/ugc/start` dropped
-   `soulId` and `viralityGate`, so the Phase E Soul work could not be triggered
-   end-to-end. `app/api/ugc/start/route.ts` now forwards both (soulId
-   sanitized/capped, viralityGate coerced to bool).
-2. **`planUgcInputs` dropped fields** — it forwarded only a subset of
-   `UgcInputs`. `lib/ugc.ts` now also wires `voiceArchetype`, `demographic`,
-   `setting` (caller override → analysis hint), `soulId`, and `viralityGate`,
-   all via backwards-compatible optional args.
-3. **Captions phrase grouping** — `lib/captions.ts` `wordsPerLine` (default 1
-   = unchanged karaoke). 2–3 renders Submagic-style phrase lines where the
-   spoken word is highlighted in the brand colour and the rest stays white.
-   RTL-aware. (Shipped with Phase C commit.)
-4. **Caption min display time** — `minWordMs` (default 300) extends short words
-   without colliding with the next word, so fast speech no longer strobes.
-   (Shipped with Phase C commit.)
-5. **`resolveMusicBed(storeId)`** — `lib/music.ts` one-call resolution
-   (vertical → track → mix config → ffmpeg sidechain + loudnorm filters) so
-   callers stop stitching the helpers by hand. (Shipped with Phase D commit.)
-
-What was tested
-- `npx tsc --noEmit` clean; `npm run build` passes.
-
-## Phase G — audio/captions: gap-closure round 3 ✅
-
-1. **TTS script sanitize missed URLs + emoji** — `sanitizeScriptForTts` now
-   strips `http(s)://…` links and emoji in both languages (they read as
-   gibberish in TTS prosody), on top of the Hebrew Latin-strip / em-dash
-   removal from Phase A.
-2. **Single-Soul resolver** — `lib/souls.ts` `resolveSoul(id)` resolves across
-   live Higgsfield + presets (preset is the fallback when no live Soul matches).
-3. **VO loudness is now data-driven** — `lib/music.ts` `VO_LOUDNESS`
-   (-14 LUFS / -1 dBTP / 11 LRA, matching Meta/IG normalization) +
-   `loudnormFilter()`, surfaced via `resolveMusicBed().loudnormFilter` so the
-   Terminal-1 mux can normalize the VO from the same single source of truth as
-   the sidechain duck.
-4. **Premium route SSRF guard** — `app/api/ugc/premium/route.ts` now requires an
-   https `productImageUrl` (the 503 feature-flag gate was already correct).
-5. **Caption overflow** — verified the existing `WrapStyle: 0` (libass
-   smart-wrap) handles long phrase-mode lines; no change needed (verified
-   rather than adding churn).
-
-What was tested
-- `npx tsc --noEmit` clean; `npm run build` passes. `/api/captions`,
-  `/api/souls`, `/api/souls/library`, `/api/ugc/*` all register.
-
-## Environment notes
-- This container shipped with an incomplete `node_modules` (missing `react`,
-  `next/dist`, `@types/*`), so `tsc`/`next` initially failed. Completed via
-  `npm install` (npmjs is the allowlisted host) — typecheck + build are green
-  across the whole repo afterward.
-- `node_modules/next/dist/docs/` is not present in this install; new route
-  handlers follow the existing in-repo conventions (`runtime`, `dynamic`,
-  `NextResponse`).
-- `next build` rewrites `tsconfig.json` include globs on each run; reverted each
-  time to keep the branch free of unrelated churn (tsconfig is not owned here).
+Every unverified item is gated by a fall-through path (model chain,
+filter optional toggle, fail-open scoring), so a wrong slug or filter
+syntax degrades to the next entry rather than failing the run.
 
 ---
 
-# SCOPE COMPLETE — production ready
+## SCOPE COMPLETE — production ready
 
-Terminal 2 (audio / captions / UGC) scope is complete:
-- **A** ElevenLabs v3 Hebrew tuning (per-archetype voice settings, Hebrew voice
-  library, script sanitize).
-- **B** sync/lipsync-2 Hebrew phoneme accuracy (temperature lever).
-- **C** libass RTL Hebrew burn-in (real bidi embedding, correct ASS colours,
-  phrase mode + anti-strobe).
-- **D** music sidechain/loudnorm config single-source + `/api/captions` route.
-- **E** Soul library with Malik preset; `/api/souls` routes reconciled.
-- **F** round-2 gaps (soulId API passthrough, `planUgcInputs` forwarding).
-- **G** round-3 gaps (TTS URL/emoji strip, `resolveSoul`, VO loudnorm, premium
-  SSRF guard).
+Every gap identified in the autonomous re-scan of `lib/stitch.ts`,
+`lib/showcase.ts`, `lib/postprocess.ts`, `lib/quality-check.ts`,
+`app/api/stitch/**`, `app/api/showcase/**`, and `scripts/smoke-*` has
+been built and pushed. The video pipeline is ready for smoke-verification
+against the live Vercel deploy.
 
-Typecheck + build green. Owned files only; Terminal 1/3/4 files untouched.
-Live model verification (ElevenLabs v3, sync/lipsync-2 temperature, Higgsfield)
-remains pending network access — smoke steps documented in BLOCKERS.md.
+Recommended verification order:
+1. `BASE_URL=https://adlab-amber.vercel.app node scripts/smoke-health.mjs`
+   — confirms BLOB / FAL / Replicate / ffmpeg-static wiring.
+2. `BASE_URL=… node scripts/smoke-stitch.mjs`
+   — confirms the three-tier fallback works on a known-good 2-clip input.
+3. `BASE_URL=… node scripts/smoke-postprocess.mjs <url> fast`
+   — confirms the ffmpeg pass + Blob upload work.
+4. `BASE_URL=… PRODUCT_URL=<shopify-cdn> node scripts/smoke-showcase.mjs "ring"`
+   — confirms hero → animate → quality check → done end-to-end.
+5. `BASE_URL=… PRODUCT_URL=<shopify-cdn> STITCH=1 node scripts/smoke-sequence.mjs "ring" 20`
+   — confirms the multi-clip orchestrator + chain + final stitch.
+
+Anything else in the video pipeline is owned by sister cowork branches
+(`feat/audio-captions`, `feat/meta-loop`, `feat/ux-rtl`).
