@@ -33,7 +33,7 @@
 // the most-processed URL we have so far.
 import Replicate from "replicate";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile, stat } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, stat, readFile } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -459,5 +459,119 @@ async function resolveLutPath(lutPath?: string): Promise<string | undefined> {
   } catch {
     console.warn(`[postprocess] LUT not found at ${effective}, falling back to curves`);
     return undefined;
+  }
+}
+
+// ---- Audio/Captions add-ons (preserved from feat/audio-captions merge) ----
+
+export interface CaptionStyle {
+  enabled: boolean;
+  position?: "top" | "middle" | "bottom";
+  highlightHex?: string;
+  fontFamily?: string;
+}
+
+export interface MusicBed {
+  filePath: string;
+  volumeDb?: number;
+}
+
+export async function addMusicBed(
+  videoUrl: string,
+  musicPath: string,
+  opts: { musicDb?: number } = {}
+): Promise<string> {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const ffmpegPath = require("ffmpeg-static") as string | null;
+  if (!ffmpegPath) throw new Error("ffmpeg-static binary not available");
+  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    throw new Error("BLOB_READ_WRITE_TOKEN required for addMusicBed");
+  }
+  const musicDb = opts.musicDb ?? -16;
+
+  const workDir = await mkdtemp(path.join(tmpdir(), "music-"));
+  try {
+    const res = await fetch(videoUrl);
+    if (!res.ok) throw new Error(`fetch ${videoUrl}: HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    const inPath = path.join(workDir, "in.mp4");
+    const outPath = path.join(workDir, "out.mp4");
+    await writeFile(inPath, buf);
+
+    const filter =
+      `[0:a]asplit=2[voice][scin];` +
+      `[1:a]volume=${musicDb}dB[bed];` +
+      `[bed][scin]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=300[duck];` +
+      `[voice][duck]amix=inputs=2:duration=first:dropout_transition=0[mix]`;
+
+    await runFfmpeg(ffmpegPath, [
+      "-y",
+      "-i", inPath,
+      "-stream_loop", "-1", "-i", musicPath,
+      "-shortest",
+      "-filter_complex", filter,
+      "-map", "0:v",
+      "-map", "[mix]",
+      "-c:v", "copy",
+      "-c:a", "aac", "-b:a", "192k",
+      "-movflags", "+faststart",
+      outPath,
+    ]);
+
+    const sz = (await stat(outPath)).size;
+    if (sz < 1024) throw new Error(`addMusicBed mp4 too small (${sz} bytes)`);
+    const mp4 = await readFile(outPath);
+    const { put } = await import("@vercel/blob");
+    const blob = await put(`music/${Date.now()}.mp4`, mp4, {
+      access: "public",
+      contentType: "video/mp4",
+      addRandomSuffix: true,
+    });
+    return blob.url;
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+export async function burnCaptions(videoUrl: string, assPath: string): Promise<string> {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const ffmpegPath = require("ffmpeg-static") as string | null;
+  if (!ffmpegPath) throw new Error("ffmpeg-static binary not available");
+  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    throw new Error("BLOB_READ_WRITE_TOKEN required for burnCaptions");
+  }
+
+  const workDir = await mkdtemp(path.join(tmpdir(), "cap-"));
+  try {
+    const res = await fetch(videoUrl);
+    if (!res.ok) throw new Error(`fetch ${videoUrl}: HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    const inPath = path.join(workDir, "in.mp4");
+    const outPath = path.join(workDir, "out.mp4");
+    await writeFile(inPath, buf);
+
+    const safeAss = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
+    await runFfmpeg(ffmpegPath, [
+      "-y", "-i", inPath,
+      "-vf", `ass=${safeAss}`,
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+      "-c:a", "copy",
+      "-pix_fmt", "yuv420p",
+      "-movflags", "+faststart",
+      outPath,
+    ]);
+
+    const sz = (await stat(outPath)).size;
+    if (sz < 1024) throw new Error(`burnCaptions mp4 too small (${sz} bytes)`);
+    const mp4 = await readFile(outPath);
+    const { put } = await import("@vercel/blob");
+    const blob = await put(`captions/${Date.now()}.mp4`, mp4, {
+      access: "public",
+      contentType: "video/mp4",
+      addRandomSuffix: true,
+    });
+    return blob.url;
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
   }
 }

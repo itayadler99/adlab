@@ -27,12 +27,14 @@ export async function POST(req: NextRequest) {
     }
     const brandKit =
       body.brandKit !== false && body.storeId ? await getBrandKit(body.storeId) : undefined;
+    // brandKit/pipeline/goldenHour/lighting are read for compat with the audio-captions
+    // route surface; the video-pipeline rewrite of applyRealism does not consume them yet.
+    void brandKit;
+    void body.pipeline;
+    void body.goldenHour;
+    void body.lighting;
     const result = await applyRealism(body.url, {
       level: body.level,
-      brandKit,
-      pipeline: body.pipeline,
-      goldenHour: body.goldenHour,
-      lighting: body.lighting,
     });
 
     // Optional caption burn-in (P4). Off by default. We burn AFTER realism so
