@@ -27,9 +27,20 @@ import { checkVideoQuality } from "./quality-check";
 export const FAL_HERO_ENDPOINT = "fal-ai/nano-banana/edit";
 /** Secondary hero compositor. nano-banana failures fall through here. */
 export const FAL_HERO_ENDPOINT_FALLBACK = "fal-ai/flux-pro/kontext";
+/** Replicate equivalents — used when FAL credentials are dead/missing. */
+export const REPLICATE_HERO_NANO_BANANA = "google/nano-banana" as const;
+export const REPLICATE_HERO_FLUX_KONTEXT = "black-forest-labs/flux-kontext-pro" as const;
 
 export type ShowcaseStage = "hero" | "animate" | "done" | "failed";
-type HeroProvider = "nano-banana" | "flux-kontext" | "raw-product";
+// Provider walk: FAL nano → FAL flux → Replicate nano → Replicate flux → raw.
+// Replicate tiers exist because the FAL key revokes/expires routinely and
+// raw-product alone produces flat boring ads (the user complained).
+type HeroProvider =
+  | "nano-banana"
+  | "flux-kontext"
+  | "nano-banana-replicate"
+  | "flux-kontext-replicate"
+  | "raw-product";
 
 const QUALITY_THRESHOLD = 7;
 const QUALITY_MAX_ATTEMPTS = 2;
@@ -258,9 +269,49 @@ export async function advanceShowcase(state: ShowcaseState): Promise<ShowcaseSta
       }
     }
 
-    // Replicate animate poll
+    // Replicate poll — used by both hero (nano-banana / flux-kontext Replicate
+    // tiers) and animate (kling-2.1-master).
     const prediction = await replicate().predictions.get(state.pending.jobId);
     const status = prediction.status as string;
+
+    // Replicate hero poll branch
+    if (state.stage === "hero") {
+      if (status === "failed" || status === "canceled") {
+        const errStr = prediction.error ? String(prediction.error) : "unknown";
+        const nextProvider = nextHeroProvider(state.heroProvider);
+        if (nextProvider !== state.heroProvider) {
+          console.warn(`[showcase] hero ${state.heroProvider} (replicate) failed (${errStr}); falling back to ${nextProvider}`);
+          state.pending = undefined;
+          await submitHero(state);
+          state.updatedAt = Date.now();
+          return state;
+        }
+        state.stage = "failed";
+        state.error = `hero stage failed: ${errStr}`;
+        state.updatedAt = Date.now();
+        return state;
+      }
+      if (status !== "succeeded") {
+        state.updatedAt = Date.now();
+        return state;
+      }
+      const out = prediction.output as string | string[] | null;
+      const imageUrl = typeof out === "string" ? out : Array.isArray(out) ? out[0] : undefined;
+      if (!imageUrl) {
+        state.stage = "failed";
+        state.error = "hero stage returned no image URL";
+        state.updatedAt = Date.now();
+        return state;
+      }
+      state.artifacts.heroImageUrl = imageUrl;
+      state.pending = undefined;
+      state.stage = "animate";
+      await submitAnimate(state, ANIMATE_FALLBACK_CHAIN[0]);
+      state.updatedAt = Date.now();
+      return state;
+    }
+
+    // Replicate animate poll
     if (status === "failed" || status === "canceled") {
       const errStr = prediction.error ? String(prediction.error) : "unknown";
       const fallback = nextAnimateModel(state.animateModel);
@@ -378,42 +429,82 @@ async function submitHero(state: ShowcaseState): Promise<void> {
   }
 
   const prompt = buildHeroPrompt(state.inputs);
-  const endpoint =
-    nextProvider === "nano-banana" ? FAL_HERO_ENDPOINT : FAL_HERO_ENDPOINT_FALLBACK;
 
-  const input: Record<string, unknown> =
-    nextProvider === "nano-banana"
-      ? {
-          prompt,
-          image_urls: [state.inputs.productImageUrl],
-          num_images: 1,
-          output_format: "jpeg",
-        }
-      : {
-          // flux-pro/kontext accepts a single conditioning image with an edit
-          // prompt — same shape as nano-banana but a different field name.
-          prompt,
-          image_url: state.inputs.productImageUrl,
-          num_images: 1,
-          output_format: "jpeg",
-        };
+  // FAL tiers — nano-banana then flux-pro/kontext.
+  if (nextProvider === "nano-banana" || nextProvider === "flux-kontext") {
+    const endpoint =
+      nextProvider === "nano-banana" ? FAL_HERO_ENDPOINT : FAL_HERO_ENDPOINT_FALLBACK;
+    const input: Record<string, unknown> =
+      nextProvider === "nano-banana"
+        ? {
+            prompt,
+            image_urls: [state.inputs.productImageUrl],
+            num_images: 1,
+            output_format: "jpeg",
+          }
+        : {
+            prompt,
+            image_url: state.inputs.productImageUrl,
+            num_images: 1,
+            output_format: "jpeg",
+          };
+    try {
+      const { request_id } = await falLib.submit(endpoint, input);
+      state.pending = { provider: "fal", endpoint, jobId: request_id };
+      state.heroProvider = nextProvider;
+      return;
+    } catch (e) {
+      if (isAuthError(e)) {
+        console.warn(`[showcase] hero ${nextProvider} auth failed (${errMsg(e)}); falling through`);
+        state.heroProvider = nextProvider;
+        state.pending = undefined;
+        await submitHero(state);
+        return;
+      }
+      throw e;
+    }
+  }
 
-  try {
-    const { request_id } = await falLib.submit(endpoint, input);
-    state.pending = { provider: "fal", endpoint, jobId: request_id };
-    state.heroProvider = nextProvider;
-  } catch (e) {
-    // FAL key revoked / model gated → mark this provider as tried and walk to
-    // the next link in the chain. Eventually we land on raw-product which
-    // animates straight off the Shopify image (no compositor needed).
-    if (isAuthError(e)) {
-      console.warn(`[showcase] hero ${nextProvider} auth failed (${errMsg(e)}); falling through`);
+  // Replicate tiers — same compositors, different provider so FAL outages
+  // don't drop us to raw-product.
+  if (nextProvider === "nano-banana-replicate" || nextProvider === "flux-kontext-replicate") {
+    const model =
+      nextProvider === "nano-banana-replicate"
+        ? REPLICATE_HERO_NANO_BANANA
+        : REPLICATE_HERO_FLUX_KONTEXT;
+    const input: Record<string, unknown> =
+      nextProvider === "nano-banana-replicate"
+        ? {
+            // google/nano-banana on Replicate uses `image_input` (array of URLs) +
+            // `prompt` (edit instruction). Matches the FAL nano-banana shape.
+            prompt,
+            image_input: [state.inputs.productImageUrl],
+            output_format: "jpg",
+          }
+        : {
+            // black-forest-labs/flux-kontext-pro uses `input_image` + `prompt`.
+            prompt,
+            input_image: state.inputs.productImageUrl,
+            aspect_ratio: "match_input_image",
+            output_format: "jpg",
+            safety_tolerance: 2,
+          };
+    try {
+      const prediction = await (replicate().predictions.create as (args: {
+        model: `${string}/${string}`;
+        input: Record<string, unknown>;
+      }) => Promise<{ id: string }>)({ model, input });
+      state.pending = { provider: "replicate", endpoint: model, jobId: prediction.id };
+      state.heroProvider = nextProvider;
+      return;
+    } catch (e) {
+      // Replicate auth or model access fail → walk to next tier.
+      console.warn(`[showcase] hero ${nextProvider} failed (${errMsg(e)}); falling through`);
       state.heroProvider = nextProvider;
       state.pending = undefined;
       await submitHero(state);
       return;
     }
-    throw e;
   }
 }
 
@@ -429,6 +520,10 @@ function nextHeroProvider(current?: HeroProvider): HeroProvider {
     case "nano-banana":
       return "flux-kontext";
     case "flux-kontext":
+      return "nano-banana-replicate";
+    case "nano-banana-replicate":
+      return "flux-kontext-replicate";
+    case "flux-kontext-replicate":
       return "raw-product";
     case "raw-product":
       return "raw-product";
