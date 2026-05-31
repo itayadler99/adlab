@@ -7,6 +7,7 @@ import { getProducts, productUrl, type ShopProduct } from "./shopify";
 import { startSalesImages } from "./images";
 import { getVideoDurationSec } from "./video-meta";
 import { shouldUseShowcase, type ShowcaseInputs } from "./showcase";
+import { analyzeWinnerDeep, matchProductToWinner, type WinnerStoryboard } from "./winner-deep-analysis";
 
 export type AutopilotMode = "video" | "ugc" | "showcase";
 
@@ -275,7 +276,10 @@ Visual: ${visualDescription || "(unknown)"}`;
   return { ...parsed, visualScene: visualScene || undefined, thumbnailUrl };
 }
 
-export async function pickProduct(themes: string[]): Promise<{ id?: string; title: string; description: string; link: string; imageUrl?: string }> {
+export async function pickProduct(
+  themes: string[],
+  opts?: { winnerProductType?: string }
+): Promise<{ id?: string; title: string; description: string; link: string; imageUrl?: string }> {
   const fallback = {
     title: "Montier Jewelry",
     description: "Lab-grown moissanite jewelry with lifetime warranty.",
@@ -284,6 +288,30 @@ export async function pickProduct(themes: string[]): Promise<{ id?: string; titl
   try {
     const { products } = await getProducts(50);
     if (!products || products.length === 0) return fallback;
+
+    // Preferred path: semantic match against the winner's actual product type.
+    // This stops the orchestrator from locking onto the first "diamond"
+    // product on every run when the winner is selling a chain or ring.
+    if (opts?.winnerProductType) {
+      const matchId = await matchProductToWinner({
+        productType: opts.winnerProductType,
+        catalog: products.map((p) => ({ id: String(p.id), title: p.title })),
+      });
+      if (matchId) {
+        const matched = products.find((p) => String(p.id) === matchId);
+        if (matched) {
+          return {
+            id: String(matched.id),
+            title: matched.title,
+            description: matched.title,
+            link: productUrl(matched.handle),
+            imageUrl: matched.image?.src,
+          };
+        }
+      }
+    }
+
+    // Fallback: theme-keyword overlap, original behavior.
     const themeWords = themes.flatMap((t) => t.toLowerCase().split(/[\s,]+/)).filter((w) => w.length > 2);
     let bestProduct: ShopProduct | undefined;
     let bestScore = 0;
@@ -354,8 +382,31 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
   // Prefer top-scored ad that has a video; fall back to top-scored
   const winner = scored.find((a) => a.snapshot?.videos && a.snapshot.videos.length > 0) || scored[0];
 
-  const analysis = await analyzeWinner(winner);
-  const product = await pickProduct(analysis.body_themes);
+  // Two parallel passes on the winner:
+  //   - analyzeWinner: text/single-thumbnail vibe + style classification.
+  //   - analyzeWinnerDeep: multi-frame storyboard, character, palette,
+  //     camera motion, product type. This is what makes the generated ad
+  //     resemble the competitor — not just inherit its hook.
+  const [analysis, storyboard] = await Promise.all([
+    analyzeWinner(winner),
+    analyzeWinnerDeep(winner),
+  ]);
+
+  // Merge: storyboard's scene takes priority over thumbnail's single-line
+  // visualScene (deeper analysis), and we forward storyboard's character
+  // when single-thumb analysis missed it.
+  if (storyboard.sceneDescription && !analysis.visualScene) {
+    analysis.visualScene = storyboard.sceneDescription;
+  } else if (storyboard.sceneDescription) {
+    analysis.visualScene = storyboard.sceneDescription;
+  }
+  if (storyboard.characterDescription && !analysis.character) {
+    analysis.character = storyboard.characterDescription;
+  }
+
+  const product = await pickProduct(analysis.body_themes, {
+    winnerProductType: storyboard.productType,
+  });
 
   const scriptOut = await writeAdScript({
     productTitle: product.title,
@@ -381,11 +432,16 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
         ? "video"
         : requestedMode === "showcase"
           ? "showcase"
-          : (analysis.style === "ugc_review" || analysis.style === "yapping") && product.imageUrl
+          : // Storyboard says the winner has a model wearing/holding the product
+            // → UGC mode (actor + product fusion). This is the Ice Cartel case:
+            // every frame has a person, showcase-on-marble would be wrong.
+            storyboard.hasPerson && product.imageUrl
             ? "ugc"
-            : wantsShowcase
-              ? "showcase"
-              : "video";
+            : (analysis.style === "ugc_review" || analysis.style === "yapping") && product.imageUrl
+              ? "ugc"
+              : wantsShowcase
+                ? "showcase"
+                : "video";
 
   // Video pipeline (skipped in UGC mode)
   let videoJobId: string | undefined;
@@ -395,7 +451,8 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
   let chosenModel: VideoModel | undefined;
   if (mode === "video") {
     console.log("[autopilot] mode=video, style=", analysis.style, "product.imageUrl=", !!product.imageUrl);
-    // Resolve duration: explicit user value > probed winner duration > 15s fallback.
+    // Resolve duration: explicit user value > probed winner duration >
+    // storyboard estimate > 15s fallback.
     let chosenDuration = input.videoDuration && input.videoDuration > 0 ? input.videoDuration : undefined;
     if (!chosenDuration) {
       const winnerVideoUrl =
@@ -409,6 +466,9 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
         } catch (e) {
           console.warn("[autopilot] duration probe failed:", e instanceof Error ? e.message : e);
         }
+      }
+      if (!chosenDuration && storyboard.approxDurationSec > 0) {
+        chosenDuration = Math.min(60, Math.max(5, storyboard.approxDurationSec));
       }
       chosenDuration = chosenDuration ?? 15;
     }
@@ -518,20 +578,41 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
   // Body copy: simple template referencing winning hook
   const bodyCopy = `${analysis.hook}\n\n${product.title} — ${product.description}\n\nShop now: ${product.link}`;
 
+  // For UGC mode, build a richer script that bakes in the winner's shot list +
+  // camera motion so the lipsync video actually mirrors competitor cuts and
+  // staging, not the default "talking head on white" template.
+  const ugcScript = storyboard.shotList
+    ? `${scriptOut.script}\n\n--- Shot list (replicate from winning ad) ---\n${storyboard.shotList}\n\nCamera: ${storyboard.cameraMotion || "match the reference cuts"}.`
+    : scriptOut.script;
+
   const ugcInputs =
     mode === "ugc" && product.imageUrl
       ? {
           productTitle: product.title,
           productDescription: product.description,
           productImageUrl: product.imageUrl,
-          script: scriptOut.script,
+          script: ugcScript,
           hook: analysis.hook,
           style: analysis.style,
           language: input.language ?? "en",
           demographic: analysis.character || undefined,
+          setting: storyboard.sceneDescription || undefined,
           voiceArchetype: analysis.voiceArchetype || undefined,
         }
       : undefined;
+
+  // Showcase clip length: prefer the winner's actual duration (rounded into
+  // the showcase sub-clip budget) so a 20s competitor ad doesn't get reduced
+  // to a 5s "product floating" clip. Sub-clip max is 10s — caller stitches
+  // multiple sub-clips downstream for longer totals.
+  const showcaseClipSec = Math.min(
+    10,
+    Math.max(
+      5,
+      input.videoDuration ??
+        (storyboard.approxDurationSec > 0 ? Math.min(10, storyboard.approxDurationSec) : 10)
+    )
+  );
 
   const showcaseInputs: ShowcaseInputs | undefined =
     mode === "showcase" && product.imageUrl
@@ -542,8 +623,7 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
           // Borrow the winner's visual scene so the hero replicates competitor look,
           // not the generic studio-white default.
           scene: analysis.visualScene,
-          // Seedance 1 Pro native max is 10s; longer ads get stitched downstream.
-          durationSec: Math.min(10, Math.max(5, input.videoDuration ?? 10)),
+          durationSec: showcaseClipSec,
         }
       : undefined;
 
