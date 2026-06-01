@@ -760,7 +760,7 @@ export default function AutopilotPage() {
               <textarea
                 value={competitorInput}
                 onChange={(e) => setCompetitorInput(e.target.value)}
-                placeholder="https://www.facebook.com/ads/library/?view_all_page_id=123 או icecartel.com"
+                placeholder="הדבק קישור של מודעה ספציפית (...?id=123456) כדי לשכפל אותה במדויק, או קישור של דף שלם"
                 className="w-full bg-black border border-white/15 rounded-lg px-4 py-3 text-sm placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-violet-500 min-h-[80px]"
               />
             </div>

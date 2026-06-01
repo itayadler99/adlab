@@ -78,17 +78,33 @@ export interface AutopilotResult {
 export interface ResolvedCompetitor {
   adLibraryPageId?: string; // page id usable in FB Ad Library view_all_page_id (rare — usually different from real pageId)
   facebookPageUrl?: string; // e.g. https://www.facebook.com/icecartel/  — used to look up pageAdLibrary.id
+  /**
+   * When the user pasted a single-ad permalink (`...?id=XXXX`), we scrape
+   * ONLY that ad and skip scoring. This is the "clone this specific ad"
+   * path — the auto-scoring path was burning days picking wrong winners.
+   */
+  singleAdArchiveId?: string;
   brand: string;
   isAdLibraryUrl: boolean;
 }
 
 export function resolveCompetitor(input: string): ResolvedCompetitor {
   const trimmed = input.trim();
-  // 1. Ad Library URL with view_all_page_id
+  // 1. Ad Library URL — could be single-ad `?id=` or full-page `?view_all_page_id=`.
   if (/facebook\.com\/ads\/library/i.test(trimmed)) {
     try {
       const u = new URL(trimmed);
+      const singleId = u.searchParams.get("id") || undefined;
       const pid = u.searchParams.get("view_all_page_id") || undefined;
+      // Single-ad permalink wins. `id` param is the ad archive id; `view_all_page_id` may be absent.
+      if (singleId) {
+        return {
+          singleAdArchiveId: singleId,
+          adLibraryPageId: pid,
+          brand: pid || singleId,
+          isAdLibraryUrl: true,
+        };
+      }
       return {
         adLibraryPageId: pid,
         brand: pid || u.searchParams.get("q") || trimmed,
@@ -412,34 +428,51 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
   const dailyBudget = input.dailyBudget ?? 100;
   const resolved = resolveCompetitor(input.competitorInput);
 
-  // Step 1: resolve to a pageAdLibrary id (the id Ad Library URLs actually use).
-  let pageAdLibraryId = resolved.adLibraryPageId;
   let competitorName: string | undefined;
-  if (!pageAdLibraryId && resolved.facebookPageUrl) {
-    const page = await resolveFbPage({ url: resolved.facebookPageUrl }, 120_000);
-    if (page) {
-      pageAdLibraryId = page.pageAdLibraryId || page.pageId;
-      competitorName = page.name;
-      if (!page.isCurrentlyRunningAds && !pageAdLibraryId) {
-        throw new Error(`'${page.name || resolved.brand}' לא מריץ מודעות כרגע בפייסבוק`);
+  let ads: ApifyAd[];
+  let winner: ApifyAd;
+
+  if (resolved.singleAdArchiveId) {
+    // Single-ad clone path. User pasted a specific ad permalink — scrape
+    // only that ad, skip scoring, use it as the winner.
+    const directUrl = `https://www.facebook.com/ads/library/?id=${encodeURIComponent(
+      resolved.singleAdArchiveId
+    )}`;
+    ads = await scrapeAdLibrary({ searchUrl: directUrl, country: "US", maxResults: 1 }, 240_000);
+    if (!ads || ads.length === 0) {
+      throw new Error(
+        `לא הצלחתי לטעון את המודעה ${resolved.singleAdArchiveId}. בדוק שהקישור תקין ושהמודעה עדיין באוויר.`
+      );
+    }
+    winner = ads[0];
+    competitorName = winner.pageName;
+  } else {
+    // Page-level path. Resolve pageAdLibraryId, scrape top-N, pick by score.
+    let pageAdLibraryId = resolved.adLibraryPageId;
+    if (!pageAdLibraryId && resolved.facebookPageUrl) {
+      const page = await resolveFbPage({ url: resolved.facebookPageUrl }, 120_000);
+      if (page) {
+        pageAdLibraryId = page.pageAdLibraryId || page.pageId;
+        competitorName = page.name;
+        if (!page.isCurrentlyRunningAds && !pageAdLibraryId) {
+          throw new Error(`'${page.name || resolved.brand}' לא מריץ מודעות כרגע בפייסבוק`);
+        }
       }
     }
-  }
-  if (!pageAdLibraryId) {
-    throw new Error(
-      "לא הצלחתי לזהות את עמוד הפייסבוק של המתחרה. נסה להדביק כתובת ספריית מודעות ישירות (Ad Library) עם view_all_page_id"
-    );
-  }
+    if (!pageAdLibraryId) {
+      throw new Error(
+        "לא הצלחתי לזהות את עמוד הפייסבוק של המתחרה. נסה להדביק כתובת ספריית מודעות ישירות (Ad Library) עם view_all_page_id"
+      );
+    }
 
-  // Step 2: scrape ads
-  const ads = await scrapeAdLibrary({ pageAdLibraryId, country: "US", maxResults: 30 }, 240_000);
-  if (!ads || ads.length === 0) {
-    throw new Error(`'${competitorName || resolved.brand}' אין מודעות פעילות ב-US`);
-  }
+    ads = await scrapeAdLibrary({ pageAdLibraryId, country: "US", maxResults: 30 }, 240_000);
+    if (!ads || ads.length === 0) {
+      throw new Error(`'${competitorName || resolved.brand}' אין מודעות פעילות ב-US`);
+    }
 
-  const scored = scoreAds(ads);
-  // Prefer top-scored ad that has a video; fall back to top-scored
-  const winner = scored.find((a) => a.snapshot?.videos && a.snapshot.videos.length > 0) || scored[0];
+    const scored = scoreAds(ads);
+    winner = scored.find((a) => a.snapshot?.videos && a.snapshot.videos.length > 0) || scored[0];
+  }
 
   // Two parallel passes on the winner:
   //   - analyzeWinner: text/single-thumbnail vibe + style classification.
@@ -506,44 +539,21 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
     duration: 15,
   });
 
-  // Decide mode:
-  // - Explicit override always wins.
-  // - "auto": UGC for ugc_review/yapping with a product image, showcase for
-  //   product-focused styles (demo / small-wearable founder_pov), else plain video.
+  // Decide mode.
+  // Rule changes after week-long misroute pain:
+  //   - Single-ad clone path (user pasted ?id=…) ALWAYS uses video sequence
+  //     — that's the only mode that honors arbitrary source duration faithfully.
+  //   - "auto" without single-ad now defaults to "video" too. Showcase /
+  //     UGC must be explicitly chosen by the caller — auto-fallback to
+  //     showcase produced 1×10s zooms instead of cloning the source.
   const requestedMode = input.mode ?? "auto";
-  const wantsShowcase = shouldUseShowcase({
-    hasProductImage: Boolean(product.imageUrl),
-    style: analysis.style,
-    productTitle: product.title,
-  });
-  // Duration-aware routing. UGC + showcase are single-clip pipelines capped
-  // at ~10s. When the winner is longer than that, the only mode that can
-  // honor the duration faithfully (via startVideoSequence stitching) is
-  // "video". So if the user didn't explicitly pick a mode AND the winner is
-  // longer than the single-clip ceiling, we promote to video.
-  const longWinner = storyboard.approxDurationSec > 10 || (input.videoDuration ?? 0) > 10;
   const mode: AutopilotMode =
     requestedMode === "ugc"
       ? "ugc"
-      : requestedMode === "video"
-        ? "video"
-        : requestedMode === "showcase"
-          ? "showcase"
-          : longWinner && product.imageUrl
-            ? // Long competitor ads → stitched i2v video. Single-clip UGC
-              // would force a 10s cut and lose the multi-shot cadence.
-              "video"
-            : // Storyboard says the winner has a model wearing/holding the product
-              // → UGC mode (actor + product fusion). This is the Ice Cartel case
-              // for short ads: every frame has a person, showcase-on-marble
-              // would be wrong.
-              storyboard.hasPerson && product.imageUrl
-              ? "ugc"
-              : (analysis.style === "ugc_review" || analysis.style === "yapping") && product.imageUrl
-                ? "ugc"
-                : wantsShowcase
-                  ? "showcase"
-                  : "video";
+      : requestedMode === "showcase"
+        ? "showcase"
+        : // "video" OR "auto" OR single-ad clone all resolve to video sequence.
+          "video";
 
   // Video pipeline (skipped in UGC mode)
   let videoJobId: string | undefined;
