@@ -25,8 +25,19 @@ const COMPOSITE_MAX_ATTEMPTS = 2;     // first attempt + 1 retry
 // FAL endpoints used by each stage
 export const FAL = {
   actor:    "fal-ai/flux-pro/v1.1-ultra",
+  // Nano Banana Pro = Gemini 2.5 Flash Image Pro, materially better at
+  // human+product composites (correct scale, natural grip, finger geometry)
+  // than the standard nano-banana endpoint. We try Pro first, fall through
+  // to standard on auth/availability errors.
+  compositePro:"fal-ai/nano-banana/pro/edit",
   composite:"fal-ai/nano-banana/edit",
   animate:  "fal-ai/veo3.1/fast/image-to-video",
+  // OmniHuman 1.5 — single-pass talking-head video from still + audio.
+  // Replaces the old animate + lipsync two-stage pipeline. This is the
+  // unlock behind MakeUGC's perceived realism: micro-gestures, blink,
+  // breath, body sync — not just mouth shapes pasted onto a static frame.
+  // Falls through to the legacy two-stage path only when USE_OMNIHUMAN=0.
+  omnihuman:"fal-ai/bytedance/omnihuman",
   // TTS: prefer eleven-v3 (richer emotion/breath/pauses) with a
   // turbo-v2.5 fallback if the v3 endpoint rejects the submit.
   tts:      "fal-ai/elevenlabs/tts/eleven-v3",
@@ -36,6 +47,10 @@ export const FAL = {
   // legacy cjwbw/wav2lip on Replicate.
   lipsync:  "fal-ai/sync-lipsync/v2",
 } as const;
+
+// OmniHuman pipeline — single-pass replacement for animate+lipsync.
+// Default ON. Set USE_OMNIHUMAN=0 in env to fall back to the old chain.
+const USE_OMNIHUMAN = process.env.USE_OMNIHUMAN !== "0";
 
 // Replicate model slugs for the lipsync fallback chain.
 const REPLICATE_LIPSYNC_PRIMARY = "sync/lipsync-2" as const;
@@ -137,7 +152,12 @@ export interface UgcState {
   viralityReasons?: string[];
 }
 
-const STAGE_ORDER: UgcStage[] = ["actor", "composite", "animate", "tts", "lipsync", "done"];
+// When OmniHuman is on, the dedicated "animate" stage is skipped — the
+// final "lipsync" stage drives the still composite directly from audio,
+// producing the talking-head video in one pass.
+const STAGE_ORDER: UgcStage[] = USE_OMNIHUMAN
+  ? ["actor", "composite", "tts", "lipsync", "done"]
+  : ["actor", "composite", "animate", "tts", "lipsync", "done"];
 
 function nextStage(s: UgcStage): UgcStage {
   const idx = STAGE_ORDER.indexOf(s);
@@ -178,6 +198,14 @@ export async function advanceUgc(state: UgcState): Promise<UgcState> {
     // Lipsync stage gets an in-band fallback to the next tier rather than
     // tearing down the whole pipeline — that's the whole point of the chain.
     if (state.stage === "lipsync") {
+      // OmniHuman path has no rawVideoUrl, so the legacy tier chain has
+      // nothing to lipsync. Fail fast and surface the upstream error.
+      if (USE_OMNIHUMAN && !state.artifacts.rawVideoUrl) {
+        state.stage = "failed";
+        state.error = `omnihuman stage failed: ${job.error || "unknown"}`;
+        state.updatedAt = Date.now();
+        return state;
+      }
       const currentTier = state.lipsyncTier ?? 1;
       if (currentTier < 3) {
         const nextTier = (currentTier + 1) as 2 | 3;
@@ -372,7 +400,6 @@ async function submitStage(
     }
     case "composite": {
       if (!state.artifacts.actorImageUrl) throw new Error("composite stage: missing actorImageUrl");
-      endpoint = FAL.composite;
       // On the first submission, compositeAttempts is undefined → seed to 1.
       // The advance loop bumps it to 2 before resubmitting on retry.
       if (state.compositeAttempts === undefined) state.compositeAttempts = 1;
@@ -380,12 +407,27 @@ async function submitStage(
       const prompt = isRetry
         ? buildCompositeRetryPrompt(ctx, opts.compositeRetryReasons || [])
         : buildCompositePrompt(ctx);
-      input = {
+      const compositeInput = {
         prompt,
         image_urls: [state.artifacts.actorImageUrl, state.inputs.productImageUrl],
         num_images: 1,
         output_format: "jpeg",
       };
+      // Tier 1: Nano Banana Pro (Gemini 2.5 Flash Image Pro) — better grip
+      // geometry / scale on human+product composites. Fall through to the
+      // standard endpoint on any submit-time failure.
+      try {
+        const { request_id } = await falLib.submit(FAL.compositePro, compositeInput);
+        state.pending = { endpoint: FAL.compositePro, jobId: request_id, provider: "fal" };
+        return;
+      } catch (e) {
+        console.warn(
+          "[ugc] nano-banana/pro submit failed, falling back to standard nano-banana/edit:",
+          e instanceof Error ? e.message : e
+        );
+      }
+      endpoint = FAL.composite;
+      input = compositeInput;
       break;
     }
     case "animate": {
@@ -472,8 +514,31 @@ async function submitStage(
       break;
     }
     case "lipsync": {
-      if (!state.artifacts.rawVideoUrl) throw new Error("lipsync stage: missing rawVideoUrl");
       if (!state.artifacts.audioUrl) throw new Error("lipsync stage: missing audioUrl");
+      // OmniHuman path: drive the still composite directly from audio in
+      // a single pass. No animate stage upstream. On submit-time failure,
+      // fall through to the legacy animate+lipsync pipeline by faking an
+      // animate stage from the composite still (degraded but unblocked).
+      if (USE_OMNIHUMAN) {
+        if (!state.artifacts.compositeImageUrl) throw new Error("lipsync stage: missing compositeImageUrl");
+        try {
+          const { request_id } = await falLib.submit(FAL.omnihuman, {
+            image_url: state.artifacts.compositeImageUrl,
+            audio_url: state.artifacts.audioUrl,
+          });
+          state.pending = { endpoint: FAL.omnihuman, jobId: request_id, provider: "fal" };
+          return;
+        } catch (e) {
+          console.warn(
+            "[ugc] omnihuman submit failed, falling back to legacy lipsync tier chain:",
+            e instanceof Error ? e.message : e
+          );
+          // Without a rawVideoUrl the tier chain has nothing to lipsync to.
+          // Bail to the failed state — caller can retry with USE_OMNIHUMAN=0.
+          throw new Error("omnihuman submit failed and no rawVideoUrl available for legacy fallback");
+        }
+      }
+      if (!state.artifacts.rawVideoUrl) throw new Error("lipsync stage: missing rawVideoUrl");
       // Tiered fallback (Replicate sync/lipsync-2 → FAL sync-lipsync/v2 →
       // Replicate cjwbw/wav2lip) is handled by a dedicated helper that
       // updates state.pending + state.lipsyncTier in-band.
