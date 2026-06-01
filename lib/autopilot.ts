@@ -3,7 +3,8 @@ import { resolveFbPage, scrapeAdLibrary, type ApifyAd } from "./apify";
 import { anthropic, writeAdScript, writeHeadlines } from "./anthropic";
 import { startVideoSequence, type VideoModel } from "./video";
 // VideoModel re-exported for callers
-import { getProducts, productUrl, type ShopProduct } from "./shopify";
+import { getProducts, getProductImages, productUrl, type ShopProduct } from "./shopify";
+import { pickGalleryReferences } from "./product-gallery-picker";
 import { startSalesImages } from "./images";
 import { getVideoDurationSec } from "./video-meta";
 import { shouldUseShowcase, type ShowcaseInputs } from "./showcase";
@@ -18,7 +19,17 @@ export interface AutopilotResult {
   winningAdHook: string;
   winningAdStyle: AdStyle;
   winningAdThemes: string[];
-  product: { id?: string; title: string; description: string; link: string; imageUrl?: string };
+  product: {
+    id?: string;
+    title: string;
+    description: string;
+    link: string;
+    imageUrl?: string;
+    /** Vision-ranked clean reference shots from the Shopify gallery (best-first). */
+    referenceImageUrls?: string[];
+    /** Cleanest macro / single-item shot. Used as the i2v start anchor. */
+    primaryReferenceUrl?: string;
+  };
   script: string;
   visualPrompt: string;
   cta: string;
@@ -293,12 +304,42 @@ Visual: ${visualDescription || "(unknown)"}`;
 export async function pickProduct(
   themes: string[],
   opts?: { winnerProductType?: string }
-): Promise<{ id?: string; title: string; description: string; link: string; imageUrl?: string }> {
+): Promise<{
+  id?: string;
+  title: string;
+  description: string;
+  link: string;
+  imageUrl?: string;
+  referenceImageUrls?: string[];
+  primaryReferenceUrl?: string;
+}> {
   const fallback = {
     title: "Montier Jewelry",
     description: "Lab-grown moissanite jewelry with lifetime warranty.",
     link: process.env.LINK_MONTIER_US || "https://montierjewelry.com",
   };
+
+  // Run the gallery picker after we know which product won. Storefront main
+  // images often show a model wearing 5 stacked Cubans; ranking the full
+  // gallery gives us clean single-item shots so the i2v doesn't hallucinate
+  // an extra clasp or chain count.
+  async function enrichGallery(productId: number | string, productTitle: string, mainImageUrl?: string) {
+    try {
+      const gallery = await getProductImages(productId);
+      if (gallery.length === 0) {
+        return { referenceImageUrls: mainImageUrl ? [mainImageUrl] : undefined, primaryReferenceUrl: mainImageUrl };
+      }
+      const picked = await pickGalleryReferences(gallery, productTitle, 3);
+      return {
+        referenceImageUrls: picked.references.length > 0 ? picked.references : undefined,
+        primaryReferenceUrl: picked.primary || mainImageUrl,
+      };
+    } catch (e) {
+      console.warn("[pickProduct] gallery enrichment failed:", e instanceof Error ? e.message : e);
+      return { referenceImageUrls: mainImageUrl ? [mainImageUrl] : undefined, primaryReferenceUrl: mainImageUrl };
+    }
+  }
+
   try {
     const { products } = await getProducts(50);
     if (!products || products.length === 0) return fallback;
@@ -314,12 +355,14 @@ export async function pickProduct(
       if (matchId) {
         const matched = products.find((p) => String(p.id) === matchId);
         if (matched) {
+          const gallery = await enrichGallery(matched.id, matched.title, matched.image?.src);
           return {
             id: String(matched.id),
             title: matched.title,
             description: matched.title,
             link: productUrl(matched.handle),
-            imageUrl: matched.image?.src,
+            imageUrl: gallery.primaryReferenceUrl || matched.image?.src,
+            ...gallery,
           };
         }
       }
@@ -341,12 +384,14 @@ export async function pickProduct(
       }
     }
     if (!bestProduct) bestProduct = products[0];
+    const gallery = await enrichGallery(bestProduct.id, bestProduct.title, bestProduct.image?.src);
     return {
       id: String(bestProduct.id),
       title: bestProduct.title,
       description: bestProduct.title,
       link: productUrl(bestProduct.handle),
-      imageUrl: bestProduct.image?.src,
+      imageUrl: gallery.primaryReferenceUrl || bestProduct.image?.src,
+      ...gallery,
     };
   } catch {
     return fallback;
@@ -566,8 +611,12 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
     }
     // Strengthen the prompt with the explicit product name so models that
     // partially honor the seed image still keep the same item.
+    // Identity-lock language: stop the model from inventing a fake clasp,
+    // adding extra chains, or merging multiple items into one piece — these
+    // are the exact failure modes user flagged (e.g. Ice Cartel "4 chains
+    // joined with a clasp that doesn't exist").
     const productAnchor = hasProductImg
-      ? `\n\nThe single product visible in the video is the EXACT item shown in the reference image: ${product.title}. Do not invent or substitute jewelry. Hold the camera close enough that the product reads clearly.`
+      ? `\n\nThe single product visible in the video is the EXACT item shown in the reference image: ${product.title}. Identity lock: do not invent or substitute jewelry, do not change the clasp shape, do not add a second chain or extra rings, do not stack multiple pieces. Render exactly ONE item — the one in the seed frame — from start to finish. Hold the camera close enough that the product reads clearly.`
       : "";
     // Inject the winner ad's visual scene so the generation actually mirrors the
     // competitor's look (lighting, backdrop, mood) instead of defaulting to a
@@ -685,6 +734,10 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
           scene: analysis.visualScene,
           durationSec: showcaseClipSec,
           totalSec: showcaseTotalSec,
+          // Gallery-ranked clean shots so nano-banana sees the actual single
+          // item from multiple angles, not just the "model wearing 5 chains"
+          // storefront hero.
+          referenceImageUrls: product.referenceImageUrls,
         }
       : undefined;
 

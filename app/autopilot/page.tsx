@@ -67,6 +67,8 @@ interface ShowcaseInputsClient {
   durationSec?: number;
   /** Total ad length in seconds. Sequence splits into ceil(totalSec/clipSec) sub-clips. */
   totalSec?: number;
+  /** Gallery-ranked clean reference shots, best-first. Forwarded to nano-banana. */
+  referenceImageUrls?: string[];
 }
 
 type ShowcaseClipStage = "hero" | "animate" | "done" | "failed";
@@ -344,6 +346,7 @@ export default function AutopilotPage() {
         scene: inputs.scene,
         totalSec: inputs.totalSec && inputs.totalSec > 0 ? inputs.totalSec : (inputs.durationSec ?? 10),
         clipSec: inputs.durationSec ?? 10,
+        referenceImageUrls: inputs.referenceImageUrls,
       };
       const res = await fetch("/api/showcase/sequence/start", {
         method: "POST",

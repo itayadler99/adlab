@@ -123,6 +123,13 @@ export interface ShowcaseInputs {
   chainFromUrl?: string;
   /** Optional end-frame anchor (Kling 2.5 only). Drives a directed transition. */
   endFrameUrl?: string;
+  /**
+   * Extra clean reference shots from the Shopify gallery, best-first. Fed to
+   * the nano-banana compositor as a multi-image identity anchor so the hero
+   * matches the actual single-product item, not the "model wearing 5 stacked
+   * chains" main image. Optional — pipeline degrades to single image.
+   */
+  referenceImageUrls?: string[];
 }
 
 export interface ShowcaseArtifacts {
@@ -432,6 +439,17 @@ async function submitHero(state: ShowcaseState): Promise<void> {
 
   const prompt = buildHeroPrompt(state.inputs);
 
+  // Multi-image identity anchor: when the gallery picker found cleaner
+  // single-item shots, feed all of them so nano-banana locks on the actual
+  // product instead of e.g. a model wearing 5 stacked Cubans. Dedup to keep
+  // the FAL payload bounded.
+  const refImages = Array.from(
+    new Set([
+      ...(state.inputs.referenceImageUrls ?? []),
+      state.inputs.productImageUrl,
+    ].filter((u): u is string => typeof u === "string" && u.length > 0))
+  ).slice(0, 4);
+
   // FAL tiers — nano-banana then flux-pro/kontext.
   if (nextProvider === "nano-banana" || nextProvider === "flux-kontext") {
     const endpoint =
@@ -440,13 +458,13 @@ async function submitHero(state: ShowcaseState): Promise<void> {
       nextProvider === "nano-banana"
         ? {
             prompt,
-            image_urls: [state.inputs.productImageUrl],
+            image_urls: refImages,
             num_images: 1,
             output_format: "jpeg",
           }
         : {
             prompt,
-            image_url: state.inputs.productImageUrl,
+            image_url: refImages[0],
             num_images: 1,
             output_format: "jpeg",
           };
@@ -480,13 +498,13 @@ async function submitHero(state: ShowcaseState): Promise<void> {
             // google/nano-banana on Replicate uses `image_input` (array of URLs) +
             // `prompt` (edit instruction). Matches the FAL nano-banana shape.
             prompt,
-            image_input: [state.inputs.productImageUrl],
+            image_input: refImages,
             output_format: "jpg",
           }
         : {
             // black-forest-labs/flux-kontext-pro uses `input_image` + `prompt`.
             prompt,
-            input_image: state.inputs.productImageUrl,
+            input_image: refImages[0],
             aspect_ratio: "match_input_image",
             output_format: "jpg",
             safety_tolerance: 2,
@@ -662,15 +680,21 @@ export function scrubBreakPhrases(prompt: string): string {
 
 export function buildHeroPrompt(inputs: ShowcaseInputs): string {
   const scene = inputs.scene || pickDefaultScene(inputs.productTitle);
+  const multiRef =
+    (inputs.referenceImageUrls?.length ?? 0) > 1
+      ? `The supplied images are different angles of the SAME single product (${inputs.productTitle}). Treat them as one item shown from multiple views — do NOT combine them, stack them, or duplicate the piece.`
+      : "";
   return [
-    `Place the EXACT product from this image as the hero of a macro product still.`,
-    `Do not redesign, restyle, or invent any details — preserve every facet, link, gemstone, clasp, finish, and proportion of the original product 1:1.`,
+    `Place the EXACT product from the reference image(s) as the hero of a macro product still: ${inputs.productTitle}.`,
+    multiRef,
+    `Identity lock — do not redesign, restyle, or invent any details. Preserve every facet, link, gemstone, clasp shape, finish, and proportion 1:1.`,
+    `Render ONLY ONE single item. No stacked jewelry, no second chain, no extra rings, no companion pieces, no model wearing multiple items.`,
     `Scene: ${scene}.`,
     `Soft window light from upper left in the late afternoon. Real shadow under the piece, real specular reflections on the metal and stones.`,
     `Macro lens 100mm equivalent, shallow depth of field, background slightly out of focus.`,
     `Photoreal jewelry catalog still, no text, no logos, no watermarks, no people.`,
     `Vertical 9:16 framing, slightly off-center, raw documentary feel.`,
-  ].join(" ");
+  ].filter((s) => s.length > 0).join(" ");
 }
 
 export function buildAnimatePrompt(inputs: ShowcaseInputs): string {
@@ -679,6 +703,7 @@ export function buildAnimatePrompt(inputs: ShowcaseInputs): string {
     `Camera: subtle handheld push-in then a gentle hold — slight camera shake, no cuts.`,
     `Light: soft window light slowly drifts across the metal, gentle specular reflections on stones.`,
     `Movement: real physical settle — tiny weight wobble of the piece, a single gentle catchlight glint, micro dust motes in the air.`,
+    `Identity lock: the product is EXACTLY the one shown in the start frame. Do not invent a different clasp shape, do not change the chain count, do not add a second piece, do not swap gemstones. Single item only.`,
     `The product itself does not morph, deform, duplicate, or change shape. No people, no hands, no other jewelry.`,
     `Shot on iPhone 15, vertical 9:16, mild ISO grain, natural color, slightly overexposed highlights, imperfect framing, candid documentary feel.`,
   ].join(" ");
@@ -744,6 +769,8 @@ export interface ShowcaseSequenceInputs {
   totalSec: number;
   /** Length of each sub-clip. Default 10 (max for most i2v models). */
   clipSec?: number;
+  /** Forwarded to every sub-clip's hero stage. See ShowcaseInputs.referenceImageUrls. */
+  referenceImageUrls?: string[];
 }
 
 export type ShowcaseSequenceStage = "running" | "done" | "failed";
@@ -773,6 +800,7 @@ export async function startShowcaseSequence(
     hook: inputs.hook,
     scene: inputs.scene,
     durationSec: clipSec,
+    referenceImageUrls: inputs.referenceImageUrls,
   });
   return {
     stage: "running",
@@ -837,6 +865,7 @@ export async function advanceShowcaseSequence(
       scene: state.inputs.scene,
       durationSec: clipSec,
       chainFromUrl: lastFrameUrl,
+      referenceImageUrls: state.inputs.referenceImageUrls,
     });
     state.clips.push(next);
     state.updatedAt = Date.now();

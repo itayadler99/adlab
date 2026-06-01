@@ -24,6 +24,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "totalSec capped at 60" }, { status: 400 });
     }
     const clean = (s: string, max: number) => s.replace(/[\x00-\x1f\x7f]/g, " ").slice(0, max);
+    // Multi-image gallery references — sanitize: must be https, dedupe, cap 4.
+    const referenceImageUrls = Array.isArray(body.referenceImageUrls)
+      ? Array.from(
+          new Set(
+            body.referenceImageUrls.filter(
+              (u): u is string => typeof u === "string" && /^https:\/\//i.test(u)
+            )
+          )
+        ).slice(0, 4)
+      : undefined;
     const inputs: ShowcaseSequenceInputs = {
       productTitle: clean(body.productTitle, 200),
       productImageUrl: body.productImageUrl,
@@ -31,6 +41,7 @@ export async function POST(req: NextRequest) {
       scene: body.scene ? clean(body.scene, 240) : undefined,
       totalSec: Math.min(60, Math.max(5, Math.round(body.totalSec))),
       clipSec: typeof body.clipSec === "number" ? Math.min(10, Math.max(5, Math.round(body.clipSec))) : undefined,
+      referenceImageUrls,
     };
     const state = await startShowcaseSequence(inputs);
     return NextResponse.json(state);
