@@ -268,29 +268,45 @@ export interface VideoSequence {
  * Generate one or more video clips that, played back-to-back, total `totalSeconds`.
  * Each clip carries continuity hints in its prompt so the visual is coherent.
  */
+export interface SequenceOpts extends Omit<StartOpts, "duration"> {
+  // Per-clip i2v seeds. If provided, seedFrames[i] is used as the start_image
+  // for clip i (overriding opts.imageUrl for that clip). When length < clips,
+  // remaining clips fall back to opts.imageUrl.
+  // Used to clone competitor videos: keyframes are extracted from the source
+  // and each clip is seeded with its corresponding frame, preserving actor,
+  // product, and shot list across the full duration.
+  seedFrames?: string[];
+  // Optional per-clip prompt suffixes (e.g. shotList beats). When provided,
+  // perClipPrompts[i] is appended to basePrompt for clip i.
+  perClipPrompts?: string[];
+}
+
 export async function startVideoSequence(
   basePrompt: string,
   model: VideoModel,
   totalSeconds: number,
-  opts: Omit<StartOpts, "duration"> = {}
+  opts: SequenceOpts = {}
 ): Promise<VideoSequence> {
   const max = maxClipSeconds(model);
   const requested = Math.max(1, totalSeconds);
   const clipSeconds = Math.min(max, requested);
   const clips = Math.max(1, Math.ceil(requested / clipSeconds));
+  const { seedFrames, perClipPrompts, ...startOpts } = opts;
   const jobs: VideoJob[] = [];
   for (let i = 0; i < clips; i++) {
-    const part =
+    const beat = perClipPrompts?.[i];
+    const continuity =
       clips === 1
-        ? basePrompt
-        : `${basePrompt}\n\n(Scene ${i + 1} of ${clips}: ${
-            i === 0
-              ? "opening shot — establish subject, outfit, location, lighting."
-              : "direct continuation of previous scene — keep the same subject, same outfit, same location, same lighting, natural cut. Push the story forward."
-          })`;
+        ? ""
+        : i === 0
+        ? "\n\n(Scene 1 of " + clips + ": opening shot — establish subject, outfit, location, lighting.)"
+        : `\n\n(Scene ${i + 1} of ${clips}: direct continuation of previous scene — keep the same subject, same outfit, same location, same lighting, natural cut. Push the story forward.)`;
+    const part = `${basePrompt}${beat ? `\n\n${beat}` : ""}${continuity}`;
+    // Per-clip seed image, falling back to shared imageUrl.
+    const clipImage = seedFrames?.[i] ?? startOpts.imageUrl;
     // Space submissions to stay under per-second rate caps (Replicate is strict).
     if (i > 0) await sleep(1800);
-    const j = await startVideo(part, model, { ...opts, duration: clipSeconds });
+    const j = await startVideo(part, model, { ...startOpts, imageUrl: clipImage, duration: clipSeconds });
     jobs.push(j);
   }
   // Report the EFFECTIVE model (post-fallback) so the client polls the right

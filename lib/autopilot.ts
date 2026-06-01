@@ -1,7 +1,8 @@
 // Autopilot orchestrator: competitor URL -> winning ad -> matched product -> generated video + copy
 import { resolveFbPage, scrapeAdLibrary, type ApifyAd } from "./apify";
 import { anthropic, writeAdScript, writeHeadlines } from "./anthropic";
-import { startVideoSequence, type VideoModel } from "./video";
+import { startVideoSequence, maxClipSeconds, type VideoModel } from "./video";
+import { extractKeyframes } from "./winner-keyframes";
 // VideoModel re-exported for callers
 import { getProducts, getProductImages, productUrl, type ShopProduct } from "./shopify";
 import { pickGalleryReferences } from "./product-gallery-picker";
@@ -11,6 +12,32 @@ import { shouldUseShowcase, type ShowcaseInputs } from "./showcase";
 import { analyzeWinnerDeep, matchProductToWinner, type WinnerStoryboard } from "./winner-deep-analysis";
 
 export type AutopilotMode = "video" | "ugc" | "showcase";
+
+// Split a free-text shot list into N roughly-equal segments so each generated
+// clip gets the beat that corresponds to its place in the source ad timeline.
+// Falls back to splitting by sentences when bullet markers are absent.
+function chunkShotList(shotList: string, n: number): string[] {
+  if (!shotList || n < 1) return [];
+  // Prefer numbered / bulleted lines if present.
+  const lines = shotList
+    .split(/\n+/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  const items = lines.length >= n
+    ? lines
+    : shotList.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean);
+  if (items.length === 0) return [];
+  // Bucket into n groups.
+  const out: string[] = [];
+  const perBucket = items.length / n;
+  for (let i = 0; i < n; i++) {
+    const start = Math.floor(i * perBucket);
+    const end = Math.floor((i + 1) * perBucket);
+    const slice = items.slice(start, Math.max(end, start + 1));
+    out.push(`Beat ${i + 1}/${n}: ${slice.join(" ")}`);
+  }
+  return out;
+}
 
 export interface AutopilotResult {
   competitorPageName?: string;
@@ -646,15 +673,76 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
     const sceneAnchor = analysis.visualScene
       ? `\n\nReplicate this visual scene from the reference creative: ${analysis.visualScene}. Match the lighting style, palette, and framing — but keep the product the exact item above.`
       : "";
-    console.log("[autopilot] starting video sequence: model=", chosenModel, "duration=", chosenDuration, "i2v=", hasProductImg);
+    // True-clone path: when winner is actor-driven AND we have the source
+    // video, extract one keyframe per planned clip and use them as per-clip
+    // i2v seeds. This preserves the actor, scene, and shot list across the
+    // full source duration — instead of the previous tradeoff where long ads
+    // dropped the actor (because all clips shared the product still as seed).
+    //
+    // Caveats:
+    //   - Seed frame contains the COMPETITOR's product. The prompt explicitly
+    //     names our product so the model overrides the visible item where
+    //     possible. Identity-lock language tightened to clarify which slot
+    //     each seed represents (actor) vs which slot the prompt drives (product).
+    //   - Falls back gracefully: keyframe extraction failure → original
+    //     product-only seed path.
+    const sequenceModelMax = maxClipSeconds(chosenModel);
+    const plannedClips = Math.max(1, Math.ceil(chosenDuration / sequenceModelMax));
+    let seedFrames: string[] | undefined;
+    let perClipPrompts: string[] | undefined;
+    const shouldClone =
+      storyboard.hasPerson &&
+      !!winnerVideoUrl &&
+      plannedClips > 1; // single-clip <=10s already handled by UGC path; here we focus on long ads
+    if (shouldClone) {
+      try {
+        console.log("[autopilot] cloning long actor-driven ad: extracting",
+          plannedClips, "keyframes from winner video");
+        const kf = await extractKeyframes(
+          winnerVideoUrl,
+          plannedClips,
+          storyboard.approxDurationSec || undefined
+        );
+        seedFrames = kf.frameUrls;
+        // Per-clip beats: chunk shotList into N pieces so each clip gets the
+        // matching beat instead of the full shot list repeated N times.
+        const beats = chunkShotList(storyboard.shotList, plannedClips);
+        perClipPrompts = beats.length === plannedClips ? beats : undefined;
+        console.log("[autopilot] keyframe seeds ready:", kf.frameUrls.length, "frames");
+      } catch (e) {
+        console.warn("[autopilot] keyframe extraction failed, falling back to product-only seed:",
+          e instanceof Error ? e.message : e);
+      }
+    }
+
+    // If we got keyframe seeds but the chosen model is t2v (no product
+    // image case), promote to an i2v variant that accepts start_image.
+    if (seedFrames) {
+      if (chosenModel === "veo-3.1-fast") chosenModel = "veo-3.1-fast-i2v";
+      else if (chosenModel === "veo-3.1") chosenModel = "veo-3.1-i2v";
+      else if (chosenModel === "kling-3.0") chosenModel = "kling-3.0-i2v";
+      else if (chosenModel === "seedance-2.0") chosenModel = "seedance-1.0";
+      else if (chosenModel === "sora-2-pro") chosenModel = "seedance-1.0"; // sora is t2v-only
+    }
+
+    // Identity-lock has two flavors depending on whether seeds are
+    // actor-frames or product-frames.
+    const cloneAnchor = seedFrames
+      ? `\n\nThe person, outfit, hair, jewelry on the person, setting, lighting, and framing in each generated clip MUST match the seed frame for that clip exactly — this is a clone of an existing ad. Do not change the person, do not swap their existing chain or earrings for another, do not change the room or backdrop. The ONLY item being advertised in this ad is: ${product.title}. If a product is held / shown / pointed at by the person, render it as that exact item (see reference description above). Hold continuity across clips: same person, same outfit, same location.`
+      : productAnchor;
+    console.log("[autopilot] starting video sequence: model=", chosenModel,
+      "duration=", chosenDuration, "i2v=", hasProductImg, "clone?", !!seedFrames,
+      "clips=", plannedClips);
     const sequence = await startVideoSequence(
-      scriptOut.visual_prompt + sceneAnchor + productAnchor,
+      scriptOut.visual_prompt + sceneAnchor + cloneAnchor,
       chosenModel,
       chosenDuration,
       {
         aspectRatio: "9:16",
         resolution: "1080p",
         ...(hasProductImg ? { imageUrl: product.imageUrl } : {}),
+        ...(seedFrames ? { seedFrames } : {}),
+        ...(perClipPrompts ? { perClipPrompts } : {}),
       }
     );
     videoJobId = sequence.jobs[0].id;
