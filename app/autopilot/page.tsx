@@ -149,13 +149,15 @@ const STAGE_LABEL: Record<Stage, string> = {
 };
 
 type VideoModelChoice =
+  | "auto"
   | "veo-3.1-fast"
   | "sora-2-pro"
   | "kling-3.0"
   | "seedance-2.0";
 
 const VIDEO_MODELS: { value: VideoModelChoice; label: string; note: string }[] = [
-  { value: "veo-3.1-fast", label: "Veo 3.1 Fast, מומלץ", note: "Google Veo 3.1, שמונה שניות, קול מובנה, איכות מצוינת ($)" },
+  { value: "auto", label: "אוטומטי, מומלץ", note: "המערכת בוחרת דגם לפי אורך המודעה והאם יש תמונת מוצר. עד שמונה שניות Veo 3.1 Fast, עד עשר שניות Seedance, מעבר לכך Seedance עם stitch" },
+  { value: "veo-3.1-fast", label: "Veo 3.1 Fast", note: "Google Veo 3.1, שמונה שניות, קול מובנה, איכות מצוינת ($)" },
   { value: "sora-2-pro", label: "Sora 2 Pro, ריאליזם מקסימלי", note: "OpenAI, פרימיום, האיכות הגבוהה ביותר ($$$)" },
   { value: "kling-3.0", label: "Kling 3 Pro, סרטון ארוך", note: "עד חמש עשרה שניות, מצוין לתוכן גולשים ארוך ($$)" },
   { value: "seedance-2.0", label: "Seedance 2.0, תנועה דינמית", note: "Bytedance, ספורט, מחול ואקשן ($)" },
@@ -164,7 +166,7 @@ const VIDEO_MODELS: { value: VideoModelChoice; label: string; note: string }[] =
 export default function AutopilotPage() {
   const [competitorInput, setCompetitorInput] = useState("");
   const [dailyBudget, setDailyBudget] = useState(100);
-  const [videoModel, setVideoModel] = useState<VideoModelChoice>("veo-3.1-fast");
+  const [videoModel, setVideoModel] = useState<VideoModelChoice>("auto");
   const [videoDuration, setVideoDuration] = useState(0); // 0 = auto-detect from competitor
   const [adMode, setAdMode] = useState<"auto" | "video" | "ugc" | "showcase">("auto");
   const [postProcess, setPostProcess] = useState<"off" | "fast" | "speel" | "speel-4k">("fast");
@@ -663,7 +665,15 @@ export default function AutopilotPage() {
       const res = await fetch("/api/autopilot/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ competitorInput, dailyBudget, videoModel, videoDuration, mode: adMode, language }),
+        body: JSON.stringify({
+          competitorInput,
+          dailyBudget,
+          // "auto" → omit so the backend duration-based picker chooses for us.
+          videoModel: videoModel === "auto" ? undefined : videoModel,
+          videoDuration,
+          mode: adMode,
+          language,
+        }),
       });
       const data = (await res.json()) as AutopilotResult & { error?: string };
       if (!res.ok || data.error) {
