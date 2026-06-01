@@ -434,17 +434,20 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
 
   if (resolved.singleAdArchiveId) {
     // Single-ad clone path. User pasted a specific ad permalink — scrape
-    // only that ad, skip scoring, use it as the winner.
+    // a wider set then filter to the exact archive id. The Apify actor
+    // sometimes ignores the `?id=` query and returns the page's full ad set,
+    // so `maxResults:1` could grab a random ad. We pull more and filter.
     const directUrl = `https://www.facebook.com/ads/library/?id=${encodeURIComponent(
       resolved.singleAdArchiveId
     )}`;
-    ads = await scrapeAdLibrary({ searchUrl: directUrl, country: "US", maxResults: 1 }, 240_000);
-    if (!ads || ads.length === 0) {
+    ads = await scrapeAdLibrary({ searchUrl: directUrl, country: "US", maxResults: 30 }, 240_000);
+    const exact = ads.find((a) => a.adArchiveId === resolved.singleAdArchiveId);
+    if (!exact) {
       throw new Error(
         `לא הצלחתי לטעון את המודעה ${resolved.singleAdArchiveId}. בדוק שהקישור תקין ושהמודעה עדיין באוויר.`
       );
     }
-    winner = ads[0];
+    winner = exact;
     competitorName = winner.pageName;
   } else {
     // Page-level path. Resolve pageAdLibraryId, scrape top-N, pick by score.
@@ -540,20 +543,29 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
   });
 
   // Decide mode.
-  // Rule changes after week-long misroute pain:
-  //   - Single-ad clone path (user pasted ?id=…) ALWAYS uses video sequence
-  //     — that's the only mode that honors arbitrary source duration faithfully.
-  //   - "auto" without single-ad now defaults to "video" too. Showcase /
-  //     UGC must be explicitly chosen by the caller — auto-fallback to
-  //     showcase produced 1×10s zooms instead of cloning the source.
+  // Honesty constraint: a 39s actor-driven ad cannot be cloned faithfully
+  // — UGC tops at 10s single-clip, and video stitched is product-only
+  // (i2v anchored to product image, not the actor). Pick the least-lossy
+  // option for each case and surface the choice on the result.
+  //
+  //   ugc / showcase explicit → honor caller.
+  //   auto + has person + product image:
+  //       - source ≤ 12s → UGC (actor + product fusion, single clip)
+  //       - source > 12s → video sequence (loses actor but honors duration)
+  //   auto + no person + product image → video sequence (product-only).
+  //   auto + no product image → video sequence (t2v).
   const requestedMode = input.mode ?? "auto";
+  const longWinner = storyboard.approxDurationSec > 12 || (input.videoDuration ?? 0) > 12;
   const mode: AutopilotMode =
     requestedMode === "ugc"
       ? "ugc"
       : requestedMode === "showcase"
         ? "showcase"
-        : // "video" OR "auto" OR single-ad clone all resolve to video sequence.
-          "video";
+        : requestedMode === "video"
+          ? "video"
+          : storyboard.hasPerson && product.imageUrl && !longWinner
+            ? "ugc"
+            : "video";
 
   // Video pipeline (skipped in UGC mode)
   let videoJobId: string | undefined;
