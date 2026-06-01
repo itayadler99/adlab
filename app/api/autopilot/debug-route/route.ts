@@ -19,6 +19,8 @@ export async function POST(req: Request) {
       thumbnailUrl?: string;
       adBody?: string;
       adTitle?: string;
+      /** When set, bypass FAL probe and force this duration into storyboard. Test-only. */
+      durationHint?: number;
     };
     if (!body.videoUrl) {
       return NextResponse.json({ error: "videoUrl required" }, { status: 400 });
@@ -49,9 +51,14 @@ export async function POST(req: Request) {
       winnerProductType: storyboard.productType,
     });
 
-    const probed = await getVideoDurationSec(body.videoUrl).catch(() => null);
-    if (probed && probed > 0) storyboard.approxDurationSec = Math.round(probed);
-    else if (storyboard.approxDurationSec === 0) storyboard.approxDurationSec = 20;
+    let probed: number | null = null;
+    if (body.durationHint && body.durationHint > 0) {
+      storyboard.approxDurationSec = Math.round(body.durationHint);
+    } else {
+      probed = await getVideoDurationSec(body.videoUrl).catch(() => null);
+      if (probed && probed > 0) storyboard.approxDurationSec = Math.round(probed);
+      else if (storyboard.approxDurationSec === 0) storyboard.approxDurationSec = 20;
+    }
 
     const longWinner = storyboard.approxDurationSec > 10;
     const wantsShowcase = shouldUseShowcase({
