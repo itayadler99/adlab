@@ -658,16 +658,19 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
         }
       : undefined;
 
-  // Showcase clip length: prefer the winner's actual duration (rounded into
-  // the showcase sub-clip budget) so a 20s competitor ad doesn't get reduced
-  // to a 5s "product floating" clip. Sub-clip max is 10s — caller stitches
-  // multiple sub-clips downstream for longer totals.
-  const showcaseClipSec = Math.min(
-    10,
+  // Showcase clip length: each sub-clip is capped at 10s by every i2v model
+  // we use. Total ad length comes from the winner — UI stitches multiple
+  // sub-clips downstream for longer totals.
+  const showcaseClipSec = 10;
+  const showcaseTotalSec = Math.min(
+    60,
     Math.max(
       5,
-      input.videoDuration ??
-        (storyboard.approxDurationSec > 0 ? Math.min(10, storyboard.approxDurationSec) : 10)
+      input.videoDuration && input.videoDuration > 0
+        ? input.videoDuration
+        : storyboard.approxDurationSec > 0
+          ? storyboard.approxDurationSec
+          : 10
     )
   );
 
@@ -681,6 +684,7 @@ export async function runAutopilot(input: RunAutopilotInput): Promise<AutopilotR
           // not the generic studio-white default.
           scene: analysis.visualScene,
           durationSec: showcaseClipSec,
+          totalSec: showcaseTotalSec,
         }
       : undefined;
 

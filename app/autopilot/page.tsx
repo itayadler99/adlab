@@ -63,31 +63,50 @@ interface ShowcaseInputsClient {
   productImageUrl: string;
   hook: string;
   scene?: string;
+  /** Length of each sub-clip (5-10s). */
   durationSec?: number;
+  /** Total ad length in seconds. Sequence splits into ceil(totalSec/clipSec) sub-clips. */
+  totalSec?: number;
 }
 
-type ShowcaseStage = "hero" | "animate" | "done" | "failed";
-interface ShowcaseState {
-  stage: ShowcaseStage;
-  inputs: ShowcaseInputsClient;
+type ShowcaseClipStage = "hero" | "animate" | "done" | "failed";
+interface ShowcaseClipState {
+  stage: ShowcaseClipStage;
   artifacts: { heroImageUrl?: string; videoUrl?: string };
   pending?: { provider: "fal" | "replicate"; endpoint: string; jobId: string };
   error?: string;
-  animateModel?: "seedance-1-pro" | "kling-2.1";
   qualityAttempt?: number;
   qualityScore?: number;
   qualityReasons?: string[];
+}
+
+type ShowcaseStage = "running" | "done" | "failed";
+interface ShowcaseState {
+  stage: ShowcaseStage;
+  inputs: {
+    productTitle: string;
+    productImageUrl: string;
+    hook: string;
+    scene?: string;
+    totalSec: number;
+    clipSec?: number;
+  };
+  /** Per-clip sub-state. Last entry = currently active clip. */
+  clips: ShowcaseClipState[];
+  /** Public URLs for finished clips, in order. UI stitches when stage="done" and clipUrls.length>1. */
+  clipUrls: string[];
+  plannedClips: number;
+  error?: string;
   startedAt: number;
   updatedAt: number;
 }
 
 const SHOWCASE_STAGE_LABEL: Record<ShowcaseStage, string> = {
-  hero: "יוצר תמונת מוצר מסוגננת",
-  animate: "מחיה את המוצר לסרטון",
+  running: "מייצר קליפים ומאחה",
   done: "הסרטון מוכן",
   failed: "נכשל",
 };
-const SHOWCASE_STAGES: ShowcaseStage[] = ["hero", "animate", "done"];
+const SHOWCASE_STAGES: ShowcaseStage[] = ["running", "done"];
 
 type UgcStage = "actor" | "composite" | "animate" | "tts" | "lipsync" | "done" | "failed";
 interface UgcState {
@@ -187,7 +206,16 @@ export default function AutopilotPage() {
   const [showcaseState, setShowcaseState] = useState<ShowcaseState | null>(null);
   const showcaseTickRef = useRef<number | null>(null);
   const showcaseAdvanceInFlightRef = useRef(false);
-  const finalShowcaseUrl = showcaseState?.artifacts.videoUrl || null;
+  const [showcaseStitchedUrl, setShowcaseStitchedUrl] = useState<string | null>(null);
+  const [showcaseStitching, setShowcaseStitching] = useState(false);
+  const [showcaseStitchError, setShowcaseStitchError] = useState("");
+  const showcaseStitchTriggeredRef = useRef(false);
+  const lastShowcaseClip = showcaseState?.clips[showcaseState.clips.length - 1];
+  const finalShowcaseUrl =
+    showcaseStitchedUrl ||
+    (showcaseState?.stage === "done" && showcaseState.clipUrls.length === 1
+      ? showcaseState.clipUrls[0]
+      : null);
   // "Source" video — first cut from whichever pipeline produced it.
   const sourceVideoUrl = finalShowcaseUrl || finalUgcUrl || stitchedUrl || videoUrls[0] || null;
   // Preferred for player + launch — enhanced if postprocess succeeded, else source.
@@ -309,10 +337,18 @@ export default function AutopilotPage() {
 
   async function startShowcasePipeline(inputs: ShowcaseInputsClient) {
     try {
-      const res = await fetch("/api/showcase/start", {
+      const body = {
+        productTitle: inputs.productTitle,
+        productImageUrl: inputs.productImageUrl,
+        hook: inputs.hook,
+        scene: inputs.scene,
+        totalSec: inputs.totalSec && inputs.totalSec > 0 ? inputs.totalSec : (inputs.durationSec ?? 10),
+        clipSec: inputs.durationSec ?? 10,
+      };
+      const res = await fetch("/api/showcase/sequence/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(inputs),
+        body: JSON.stringify(body),
       });
       const data = (await res.json()) as ShowcaseState & { error?: string };
       if (!res.ok || data.error) {
@@ -321,6 +357,10 @@ export default function AutopilotPage() {
         return;
       }
       setShowcaseState(data);
+      setShowcaseStitchedUrl(null);
+      setShowcaseStitchError("");
+      setShowcaseStitching(false);
+      showcaseStitchTriggeredRef.current = false;
       clearShowcaseTick();
       showcaseTickRef.current = window.setInterval(() => advanceShowcaseOnce(), 5000);
     } catch (e) {
@@ -344,7 +384,7 @@ export default function AutopilotPage() {
     }
     showcaseAdvanceInFlightRef.current = true;
     try {
-      const res = await fetch("/api/showcase/advance", {
+      const res = await fetch("/api/showcase/sequence/advance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(cur),
@@ -492,6 +532,39 @@ export default function AutopilotPage() {
     });
   }
 
+  // Auto-stitch showcase sequence clips once stage="done" and clipUrls.length > 1.
+  useEffect(() => {
+    if (showcaseStitchTriggeredRef.current) return;
+    if (!showcaseState) return;
+    if (showcaseState.stage !== "done") return;
+    if (!showcaseState.clipUrls || showcaseState.clipUrls.length <= 1) return;
+    showcaseStitchTriggeredRef.current = true;
+    setShowcaseStitching(true);
+    setShowcaseStitchError("");
+    (async () => {
+      try {
+        const res = await fetch("/api/stitch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            urls: showcaseState.clipUrls,
+            clipSeconds: showcaseState.inputs.clipSec,
+          }),
+        });
+        const data = (await res.json()) as { url?: string; error?: string };
+        if (!res.ok || data.error || !data.url) {
+          setShowcaseStitchError(data.error || "stitch failed");
+        } else {
+          setShowcaseStitchedUrl(data.url);
+        }
+      } catch (e) {
+        setShowcaseStitchError(e instanceof Error ? e.message : "stitch network error");
+      } finally {
+        setShowcaseStitching(false);
+      }
+    })();
+  }, [showcaseState]);
+
   // Auto-stitch when all clips ready and N>1
   useEffect(() => {
     if (stitchTriggeredRef.current) return;
@@ -571,6 +644,10 @@ export default function AutopilotPage() {
     setLaunchInfo(null);
     setUgcState(null);
     setShowcaseState(null);
+    setShowcaseStitchedUrl(null);
+    setShowcaseStitchError("");
+    setShowcaseStitching(false);
+    showcaseStitchTriggeredRef.current = false;
     setEnhancedUrl(null);
     setEnhancing(false);
     setEnhanceError("");
@@ -908,18 +985,29 @@ export default function AutopilotPage() {
                   activeLabel={showcaseState ? SHOWCASE_STAGE_LABEL[showcaseState.stage] : undefined}
                   live={!!showcaseState}
                   tiles={[
-                    { label: "תמונת מוצר (הרו)", url: showcaseState?.artifacts.heroImageUrl, kind: "image" },
-                    { label: "סרטון", url: showcaseState?.artifacts.videoUrl, kind: "video", highlight: true },
+                    { label: "תמונת מוצר (הרו)", url: lastShowcaseClip?.artifacts.heroImageUrl, kind: "image" },
+                    {
+                      label: `סרטון (${showcaseState?.clipUrls.length ?? 0}/${showcaseState?.plannedClips ?? 0} קליפים)`,
+                      url: finalShowcaseUrl || lastShowcaseClip?.artifacts.videoUrl,
+                      kind: "video",
+                      highlight: true,
+                    },
                   ] satisfies StreamTile[]}
                 />
-                {showcaseState?.qualityScore !== undefined && (
-                  <div className={`text-xs text-center ${showcaseState.qualityScore >= 7 ? "text-emerald-300" : "text-amber-300"}`}>
-                    איכות סרטון (Claude Vision): {showcaseState.qualityScore}/10
-                    {showcaseState.qualityAttempt && showcaseState.qualityAttempt > 1
-                      ? ` (ניסיון ${showcaseState.qualityAttempt})`
+                {showcaseStitching && (
+                  <div className="text-xs text-center text-violet-300">מאחה {showcaseState?.clipUrls.length ?? 0} קליפים…</div>
+                )}
+                {showcaseStitchError && (
+                  <div className="text-xs text-center text-red-300">איחוי נכשל: {showcaseStitchError}</div>
+                )}
+                {lastShowcaseClip?.qualityScore !== undefined && (
+                  <div className={`text-xs text-center ${lastShowcaseClip.qualityScore >= 7 ? "text-emerald-300" : "text-amber-300"}`}>
+                    איכות סרטון (Claude Vision): {lastShowcaseClip.qualityScore}/10
+                    {lastShowcaseClip.qualityAttempt && lastShowcaseClip.qualityAttempt > 1
+                      ? ` (ניסיון ${lastShowcaseClip.qualityAttempt})`
                       : ""}
-                    {showcaseState.qualityReasons && showcaseState.qualityReasons.length > 0 && (
-                      <div className="text-white/40 mt-1">{showcaseState.qualityReasons.slice(0, 2).join(" · ")}</div>
+                    {lastShowcaseClip.qualityReasons && lastShowcaseClip.qualityReasons.length > 0 && (
+                      <div className="text-white/40 mt-1">{lastShowcaseClip.qualityReasons.slice(0, 2).join(" · ")}</div>
                     )}
                   </div>
                 )}

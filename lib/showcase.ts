@@ -117,6 +117,8 @@ export interface ShowcaseInputs {
   scene?: string;
   /** Clip length in seconds. 5-10. */
   durationSec?: number;
+  /** Total ad length in seconds. When > durationSec, the UI must use the sequence endpoints. */
+  totalSec?: number;
   /** For multi-clip chaining: previous clip's final frame becomes this clip's start. */
   chainFromUrl?: string;
   /** Optional end-frame anchor (Kling 2.5 only). Drives a directed transition. */
