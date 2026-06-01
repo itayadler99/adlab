@@ -759,7 +759,11 @@ export default function AutopilotPage() {
             <span className="text-violet-400">טייס אוטומטי</span>, מכתובת לקמפיין חי
           </h1>
           <p className="mt-2 text-white/50 text-sm">
-            הדביקו כתובת של מתחרה (ספריית המודעות או דומיין) ונבנה קמפיין שלם: סריקה, ניתוח, וידאו וטקסט שיווקי. אתם רק מאשרים.
+            הדביקו כתובת של מתחרה ונבנה קמפיין שלם: סריקה, ניתוח, וידאו וטקסט שיווקי. אתם רק מאשרים.
+          </p>
+          <p className="mt-2 text-white/40 text-xs leading-relaxed">
+            דומיין/דף פייסבוק/ספריית מודעות → סורק את כל המודעות הפעילות של המותג ובוחר אוטומטית את ה־winner לפי ימים פעילים, וריאציות, רוחב פלטפורמות.<br/>
+            קישור למודעה ספציפית (<code className="text-white/60">…/ads/library/?id=...</code>) → משכפל בדיוק אותה.
           </p>
         </div>
 
@@ -770,7 +774,7 @@ export default function AutopilotPage() {
               <textarea
                 value={competitorInput}
                 onChange={(e) => setCompetitorInput(e.target.value)}
-                placeholder="הדבק קישור של מודעה ספציפית (...?id=123456) כדי לשכפל אותה במדויק, או קישור של דף שלם"
+                placeholder="icecartel.com  •  facebook.com/icecartel  •  ספריית המודעות של המותג  •  או קישור למודעה אחת"
                 className="w-full bg-black border border-white/15 rounded-lg px-4 py-3 text-sm placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-violet-500 min-h-[80px]"
               />
             </div>
