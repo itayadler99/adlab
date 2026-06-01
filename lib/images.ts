@@ -75,11 +75,23 @@ export async function startSalesImages(
   return jobs;
 }
 
+// Sanitize a prompt before submitting to a vision model: collapse newlines,
+// strip control chars, and trim. Long prompts with raw newlines + quotes have
+// been shown to mangle during FAL's JSON serialization on some providers,
+// causing the model to render gibberish.
+function sanitizePrompt(prompt: string): string {
+  return prompt
+    .replace(/[\u0000-\u001F\u007F]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 async function submitTextImage(
   prompt: string,
   productImageUrl: string | undefined,
   hasText: boolean
 ): Promise<ImageJob> {
+  const clean = sanitizePrompt(prompt);
   if (hasText && falLib.hasFal()) {
     // Tier 1: nano-banana. Prefer /edit when we have the real product photo
     // so the overlay is composited onto the actual item rather than a
@@ -87,7 +99,7 @@ async function submitTextImage(
     try {
       if (productImageUrl) {
         const { request_id } = await falLib.submit(FAL_NANO_BANANA_EDIT, {
-          prompt,
+          prompt: clean,
           image_urls: [productImageUrl],
           num_images: 1,
           output_format: "jpeg",
@@ -95,7 +107,7 @@ async function submitTextImage(
         return { id: encodeFalId(FAL_NANO_BANANA_EDIT, request_id), status: "pending" };
       }
       const { request_id } = await falLib.submit(FAL_NANO_BANANA, {
-        prompt,
+        prompt: clean,
         num_images: 1,
         output_format: "jpeg",
       });
@@ -107,39 +119,34 @@ async function submitTextImage(
     // Tier 2: recraft v3 — also accurate at rendering text.
     try {
       const { request_id } = await falLib.submit(FAL_RECRAFT_V3, {
-        prompt,
+        prompt: clean,
         image_size: "portrait_16_9",
         style: "realistic_image",
       });
       return { id: encodeFalId(FAL_RECRAFT_V3, request_id), status: "pending" };
     } catch (e) {
-      console.warn("[images] recraft submit failed, falling back to flux-pro ultra:", e instanceof Error ? e.message : e);
+      console.warn("[images] recraft submit failed:", e instanceof Error ? e.message : e);
     }
 
-    // Tier 3: flux-pro ultra — text-blind, last resort.
-    try {
-      const { request_id } = await falLib.submit(FAL_FLUX_ULTRA, {
-        prompt,
-        aspect_ratio: "9:16",
-        num_images: 1,
-        output_format: "jpeg",
-        safety_tolerance: "5",
-      });
-      return { id: encodeFalId(FAL_FLUX_ULTRA, request_id), status: "pending" };
-    } catch (e) {
-      console.warn("[images] flux-pro submit failed, falling back to Replicate ideogram:", e instanceof Error ? e.message : e);
-    }
+    // For text-bearing images we DO NOT fall back to text-blind models
+    // (flux-pro ultra, ideogram-v2). Those produced the gibberish letters
+    // user has been flagging. If nano-banana + recraft both fail we throw
+    // — better to surface "all text-renderers exhausted" than ship a
+    // broken sales image.
+    throw new Error(
+      "all FAL text-rendering tiers (nano-banana, recraft) failed; refusing to fall back to text-blind models"
+    );
   }
 
-  // Non-text images, or no FAL key, or full FAL chain rejected — fall back to
-  // Replicate Ideogram (the previous default).
+  // Non-text images, or no FAL key — Ideogram v2 on Replicate is fine for
+  // pure imagery without rendered headline/bullet text.
   const prediction = await (replicate.predictions.create as (args: {
     model: `${string}/${string}`;
     input: Record<string, unknown>;
   }) => Promise<{ id: string }>)({
     model: "ideogram-ai/ideogram-v2",
     input: {
-      prompt,
+      prompt: clean,
       aspect_ratio: "9:16",
       style_type: "Realistic",
       magic_prompt_option: "On",
@@ -192,24 +199,30 @@ function buildSalesPrompts(input: SalesImageInput, count: number): string[] {
   const brand = input.brand || "Montier";
 
   // Strict text-rendering anchor — appended to every variant so nano-banana /
-  // recraft don't paraphrase, abbreviate, or substitute letters.
-  const headlineAnchor = `Render the headline text EXACTLY as: "${hook}". Do not stylize, abbreviate, paraphrase, or substitute any letters.`;
-  const bulletsAnchor = `Render each bullet text EXACTLY as written: "${b1}", "${b2}", "${b3}". Do not change spelling or word order.`;
-  const fourBulletsAnchor = `Render each bullet text EXACTLY as written: "${b1}", "${b2}", "${b3}", "${b4}". Do not change spelling or word order.`;
-  const brandAnchor = `Render brand text EXACTLY as: "${brand}".`;
+  // recraft don't paraphrase, abbreviate, or substitute letters. Character
+  // counts are stated explicitly because Gemini-powered nano-banana responds
+  // strongly to numeric constraints — without them the model drifts into
+  // letter substitution / gibberish.
+  const charCount = (s: string) => s.length;
+  const headlineAnchor = `Render the headline text EXACTLY as: "${hook}" — that is ${charCount(hook)} characters total, including spaces and punctuation. Spell every letter precisely. Do not stylize, abbreviate, paraphrase, drop letters, add letters, or substitute any character. If the model cannot fit the text legibly, shrink the font but never alter spelling.`;
+  const bulletsAnchor = `Render the three bullet texts EXACTLY: "${b1}" (${charCount(b1)} chars), "${b2}" (${charCount(b2)} chars), "${b3}" (${charCount(b3)} chars). Spell each word precisely, no abbreviations, no letter substitutions. Each bullet on its own line.`;
+  const fourBulletsAnchor = `Render the four bullet texts EXACTLY: "${b1}" (${charCount(b1)} chars), "${b2}" (${charCount(b2)} chars), "${b3}" (${charCount(b3)} chars), "${b4}" (${charCount(b4)} chars). Spell each word precisely, no abbreviations, no letter substitutions. Each bullet on its own line.`;
+  const brandAnchor = `Render brand text EXACTLY as: "${brand}" (${charCount(brand)} chars). Spell precisely.`;
+  // Negative reinforcement — Gemini follows "do not" lists well.
+  const negativeTextAnchor = `Do NOT invent fake-looking letterforms. Do NOT render lorem-ipsum-style placeholder. Do NOT render mirrored, upside-down, or scrambled letters. Every visible character must come from the strings quoted above.`;
 
   const variants = [
     // Variant 1 — hero centered + checklist
-    `Premium vertical 9:16 social ad creative, mobile-first. Photorealistic centered hero shot of ${product}, studio lighting with soft shadows. Top of frame: bold large white sans-serif headline that reads exactly "${hook}". Below the product, a clean white checklist showing exactly these three bullet points with checkmark icons: "✓ ${b1}", "✓ ${b2}", "✓ ${b3}". Bottom corner small ${brand} logotype. Background: deep matte black with subtle gold gradient. Luxury, editorial, ultra-realistic. ${headlineAnchor} ${bulletsAnchor} ${brandAnchor}`,
+    `Premium vertical 9:16 social ad creative, mobile-first. Photorealistic centered hero shot of ${product}, studio lighting with soft shadows. Top of frame: bold large white sans-serif headline that reads exactly "${hook}". Below the product, a clean white checklist showing exactly these three bullet points with checkmark icons: "✓ ${b1}", "✓ ${b2}", "✓ ${b3}". Bottom corner small ${brand} logotype. Background: deep matte black with subtle gold gradient. Luxury, editorial, ultra-realistic. ${headlineAnchor} ${bulletsAnchor} ${brandAnchor} ${negativeTextAnchor}`,
 
     // Variant 2 — split layout headline + bullets
-    `Vertical 9:16 mobile ad. Split layout. Top half: photorealistic close-up macro photo of ${product} with sparkling realistic detail, soft rim light. Bottom half: solid dark background with large bold white serif headline that reads exactly "${hook}", under it four short text bullets in clean white sans-serif on separate lines: "${b1}", "${b2}", "${b3}", "${b4}". Minimal luxury aesthetic. Crisp legible text. ${brand} watermark bottom right. ${headlineAnchor} ${fourBulletsAnchor} ${brandAnchor}`,
+    `Vertical 9:16 mobile ad. Split layout. Top half: photorealistic close-up macro photo of ${product} with sparkling realistic detail, soft rim light. Bottom half: solid dark background with large bold white serif headline that reads exactly "${hook}", under it four short text bullets in clean white sans-serif on separate lines: "${b1}", "${b2}", "${b3}", "${b4}". Minimal luxury aesthetic. Crisp legible text. ${brand} watermark bottom right. ${headlineAnchor} ${fourBulletsAnchor} ${brandAnchor} ${negativeTextAnchor}`,
 
     // Variant 3 — lifestyle + sticker badge
-    `Mobile-first 9:16 ad creative, lifestyle shot. Photorealistic image of a confident person wearing ${product} in natural daylight, casually framed shoulders-up. Overlay big bold white text at top reading exactly "${hook}". Bottom right: round sticker badge with bold black text on white "✓ ${b1}". Bottom left: small ${brand} logotype. Realistic, polished, instagram-ready. ${headlineAnchor} Render badge text EXACTLY as: "✓ ${b1}". ${brandAnchor}`,
+    `Mobile-first 9:16 ad creative, lifestyle shot. Photorealistic image of a confident person wearing ${product} in natural daylight, casually framed shoulders-up. Overlay big bold white text at top reading exactly "${hook}". Bottom right: round sticker badge with bold black text on white "✓ ${b1}". Bottom left: small ${brand} logotype. Realistic, polished, instagram-ready. ${headlineAnchor} Render badge text EXACTLY as: "✓ ${b1}" (${charCount(b1) + 2} chars). ${brandAnchor} ${negativeTextAnchor}`,
 
     // Variant 4 — comparison style
-    `Vertical 9:16 social ad. Clean white background. Large bold black headline at top reading exactly "${hook}". Centered: photorealistic ${product}. Underneath, three side-by-side stat badges in dark capsules with white text: "${b1}", "${b2}", "${b3}". Minimal, editorial, ultra-sharp typography, magazine-style. ${brand} branding. ${headlineAnchor} ${bulletsAnchor} ${brandAnchor}`,
+    `Vertical 9:16 social ad. Clean white background. Large bold black headline at top reading exactly "${hook}". Centered: photorealistic ${product}. Underneath, three side-by-side stat badges in dark capsules with white text: "${b1}", "${b2}", "${b3}". Minimal, editorial, ultra-sharp typography, magazine-style. ${brand} branding. ${headlineAnchor} ${bulletsAnchor} ${brandAnchor} ${negativeTextAnchor}`,
   ];
 
   return variants.slice(0, count);
